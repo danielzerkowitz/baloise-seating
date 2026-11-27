@@ -56,7 +56,11 @@ Three views, in the order you would use them the first time:
    - *No seating*: meeting rooms, lounges, pods. Teams can never be placed here.
 2. **Teams and days**: enter each team with its size and click the days it wants to come in.
    The header shows how full every weekday gets, before a single seat is placed, and
-   suggests which team could move when a day is too full.
+   suggests which team could move when a day is too full. Each team can belong to a
+   **domain** and an **ART** (agile release train): an ART is part of a domain or of none,
+   a team on an ART is in that ART's domain, and a team can also be in a domain only (a
+   management team) or in neither. Set them up under **Domains and ARTs**; "Seat
+   automatically" puts a team next to its ART, or else its domain.
 3. **Plan**: pick a weekday and a floor, pick a team, and click the areas where it should
    sit. The team gets the same seats on all its team days; switch to "Only Tuesday" to make
    an exception for one day. "Seat automatically" proposes seats for one team or for

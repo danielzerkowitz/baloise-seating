@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { projectStore, savedIn, startPersistence, useSaveStatus } from './state/store'
+import { projectStore, savedIn, startNewPlanInBrowser, startPersistence, useSaveStatus } from './state/store'
 import { useUi } from './state/ui'
 import { FloorsView } from './ui/floors/FloorsView'
 import { PlanView } from './ui/plan/PlanView'
@@ -32,14 +32,38 @@ export function App() {
       <div className="app app--loading" role="alert">
         <div className="empty">
           <h1 className="empty__title">Could not open the plan</h1>
-          <p className="empty__text">
-            {savedIn === 'database'
-              ? 'The database with the plan cannot be reached. Check the connection and try again.'
-              : 'The plan saved in this browser cannot be read.'}
-          </p>
-          <button type="button" className="btn btn--primary" onClick={() => void startPersistence()}>
-            Try again
-          </button>
+          {savedIn === 'database' ? (
+            <>
+              <p className="empty__text">
+                The database with the plan cannot be reached, or the plan was saved by a newer
+                version of the planner. Check the connection and reload.
+              </p>
+              {/* A reload also fetches the newest version of the planner. */}
+              <button type="button" className="btn btn--primary" onClick={() => window.location.reload()}>
+                Reload
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="empty__text">
+                The plan saved in this browser cannot be read. It may have been saved by a newer
+                version of the planner. Starting a new plan keeps the old one aside in this
+                browser; it is not deleted.
+              </p>
+              <div className="row">
+                <button type="button" className="btn" onClick={() => void startPersistence()}>
+                  Try again
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => void startNewPlanInBrowser().catch((error: unknown) => console.warn(error))}
+                >
+                  Start a new plan
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     )

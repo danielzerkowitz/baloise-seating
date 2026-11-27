@@ -65,7 +65,7 @@ function issue(
 
 /** Adds the example teams and returns the first two. */
 function twoTeams(): [Team, Team] {
-  act(() => dispatch({ type: 'team/addMany', teams: exampleTeams(getProject()) }))
+  act(() => dispatch(exampleTeams(getProject()).action))
   const [first, second] = getProject().teams
   if (!first || !second) throw new Error('The example teams are missing')
   return [first, second]

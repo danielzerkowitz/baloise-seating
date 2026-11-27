@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Issue } from '../../domain/conflicts'
-import { makeFloor, makeTeam } from '../../domain/model'
+import { makeArt, makeDomain, makeFloor, makeTeam } from '../../domain/model'
 import type { Weekday } from '../../domain/types'
 import { startingProject } from '../../state/seed'
 import { dispatch, getProject, projectStore } from '../../state/store'
@@ -41,7 +41,14 @@ function overCapacity(day: Weekday, areaId: string): Issue {
 }
 
 function addTeam(name: string, size: number, days: Weekday[]): string {
-  const team = makeTeam(getProject(), { name, size, days, group: 'Claims' })
+  // On an ART of a domain, made the first time.
+  if (!getProject().arts.some((art) => art.name === 'Claims ART')) {
+    const domain = makeDomain('Non-Life')
+    act(() => dispatch({ type: 'domain/add', domain }))
+    act(() => dispatch({ type: 'art/add', art: makeArt('Claims ART', domain.id) }))
+  }
+  const artId = getProject().arts.find((art) => art.name === 'Claims ART')?.id ?? null
+  const team = makeTeam(getProject(), { name, size, days, artId })
   act(() => dispatch({ type: 'team/add', team }))
   return team.id
 }
@@ -258,7 +265,7 @@ describe('PrintRoot', () => {
     const cells = (row: HTMLElement) => within(row).getAllByRole('cell').map((cell) => cell.textContent)
     const [, team, total] = within(page).getAllByRole('row')
     if (!team || !total) throw new Error('The table has too few rows')
-    expect(cells(team)).toEqual(['Alpha', 'Claims', '4', '4', '', 'Floor 4: NE 1', '', 'not seated', ''])
+    expect(cells(team)).toEqual(['Alpha', 'Non-Life', 'Claims ART', '4', '4', '', 'Floor 4: NE 1', '', 'not seated', ''])
     expect(cells(total)).toEqual([
       'Seats needed',
       '0 of 66 desks',

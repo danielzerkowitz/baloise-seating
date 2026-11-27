@@ -81,8 +81,8 @@ export function QuickAddRow(props: {
           </span>
         ) : null}
       </td>
-      {/* A new team gets its code from its name; the group can be filled in once it is there. */}
-      <td className="teams-td" colSpan={2} />
+      {/* A new team gets its code from its name; domain and ART can be picked once it is there. */}
+      <td className="teams-td" colSpan={3} />
       <td className="teams-td">
         <input
           className="input input--num"

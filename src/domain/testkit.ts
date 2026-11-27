@@ -1,3 +1,4 @@
+import { LIMITS } from './limits'
 import { isSeatable, sameSeating } from './model'
 import {
   DEFAULT_SETTINGS,
@@ -5,7 +6,9 @@ import {
   WEEKDAYS,
   type Area,
   type AreaKind,
+  type Art,
   type DayWish,
+  type Domain,
   type Floor,
   type Project,
   type Rect,
@@ -55,7 +58,8 @@ export function team(
     code: options.code ?? id.slice(0, 3).toUpperCase(),
     size,
     color: options.color ?? '#0f8b8d',
-    group: options.group ?? '',
+    domainId: options.domainId ?? null,
+    artId: options.artId ?? null,
     wishes: options.wishes ?? wishes,
     days: WEEKDAYS.filter((d) => days.includes(d)),
     attendance: options.attendance ?? null,
@@ -66,11 +70,26 @@ export function team(
   }
 }
 
-export function project(floors: Floor[], teams: Team[] = [], settings: Partial<Settings> = {}): Project {
+export function project(
+  floors: Floor[],
+  teams: Team[] = [],
+  settings: Partial<Settings> = {},
+  org: { domains?: Domain[]; arts?: Art[] } = {},
+): Project {
   return {
     schemaVersion: SCHEMA_VERSION,
     name: 'Test plan',
     floors,
+    // Unless given, the domains and ARTs are those the teams refer to, named after their ids
+    // (an ART on the domain of its first team).
+    domains: org.domains ?? [...new Set(teams.map((t) => t.domainId).filter((id) => id !== null))].map((id) => ({ id, name: id })),
+    arts:
+      org.arts ??
+      [...new Set(teams.map((t) => t.artId).filter((id) => id !== null))].map((id) => ({
+        id,
+        name: id,
+        domainId: teams.find((t) => t.artId === id)?.domainId ?? null,
+      })),
     teams,
     settings: { ...DEFAULT_SETTINGS, ...settings },
     accepted: {},
@@ -107,8 +126,27 @@ export function violations(p: Project): string[] {
     }
   }
 
+  const domainIds = new Set<string>()
+  for (const d of p.domains) {
+    if (domainIds.has(d.id)) out.push(`duplicate domain id ${d.id}`)
+    domainIds.add(d.id)
+    if (d.name.length > LIMITS.orgName) out.push(`domain ${d.id}: name longer than ${LIMITS.orgName}`)
+  }
+  const artDomain = new Map<string, string | null>()
+  for (const a of p.arts) {
+    if (artDomain.has(a.id)) out.push(`duplicate ART id ${a.id}`)
+    artDomain.set(a.id, a.domainId)
+    if (a.name.length > LIMITS.orgName) out.push(`ART ${a.id}: name longer than ${LIMITS.orgName}`)
+    if (a.domainId !== null && !domainIds.has(a.domainId)) out.push(`ART ${a.id}: domain is missing`)
+  }
+
   const teamIds = new Set<string>()
   for (const t of p.teams) {
+    if (t.domainId !== null && !domainIds.has(t.domainId)) out.push(`team ${t.id}: domain is missing`)
+    if (t.artId !== null) {
+      if (!artDomain.has(t.artId)) out.push(`team ${t.id}: ART is missing`)
+      else if (artDomain.get(t.artId) !== t.domainId) out.push(`team ${t.id}: domain is not its ART's domain`)
+    }
     if (teamIds.has(t.id)) out.push(`duplicate team id ${t.id}`)
     teamIds.add(t.id)
     if (!isCount(t.size)) out.push(`team ${t.id}: size ${t.size} is not a whole number >= 0`)
@@ -126,6 +164,9 @@ export function violations(p: Project): string[] {
     }
     if (t.homeFloorId !== null && !floorIds.has(t.homeFloorId)) out.push(`team ${t.id}: preferred floor is missing`)
     checkSeating(`team ${t.id}`, t.seating)
+    if (t.days.length > 0 && t.days.every((d) => t.daySeating[d] !== undefined)) {
+      out.push(`team ${t.id}: every team day has its own seating, so the normal seating is hidden`)
+    }
     for (const [day, seating] of Object.entries(t.daySeating) as [Weekday, Seating | undefined][]) {
       if (seating === undefined) {
         out.push(`team ${t.id}: day seating for ${day} is undefined`)

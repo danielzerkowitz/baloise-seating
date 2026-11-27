@@ -5,6 +5,8 @@ import {
   WEEKDAYS,
   type Area,
   type AreaKind,
+  type Art,
+  type Domain,
   type DayWish,
   type Floor,
   type Id,
@@ -461,7 +463,9 @@ export interface NewTeamInput {
   size: number
   /** Wanted team days; they are also planned. */
   days?: readonly Weekday[]
-  group?: string
+  /** Ignored when `artId` is given: the team then gets the ART's domain. */
+  domainId?: Id | null
+  artId?: Id | null
   color?: string
   code?: string
   attendance?: number | null
@@ -477,13 +481,15 @@ function wholeCount(n: number): number {
 
 export function makeTeam(project: Project, input: NewTeamInput): Team {
   const days = sortDays(input.days ?? [])
+  const org = fitOrg(project, input.domainId ?? null, input.artId ?? null)
   return {
     id: newId('team'),
     name: input.name,
     code: (input.code ?? teamCode(input.name, project.teams.map((t) => t.code))).slice(0, TEAM_CODE_LENGTH),
     size: wholeCount(input.size),
     color: input.color ?? nextTeamColor(project.teams.map((t) => t.color)),
-    group: input.group ?? '',
+    domainId: org.domainId,
+    artId: org.artId,
     wishes: wishesFromDays(days),
     days,
     attendance: input.attendance ?? null,
@@ -559,5 +565,69 @@ export function clampRect(rect: Rect): Rect {
 }
 
 export function emptyProject(name = 'Office plan'): Project {
-  return { schemaVersion: SCHEMA_VERSION, name, floors: [], teams: [], settings: { ...DEFAULT_SETTINGS }, accepted: {} }
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    name,
+    floors: [],
+    domains: [],
+    arts: [],
+    teams: [],
+    settings: { ...DEFAULT_SETTINGS },
+    accepted: {},
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Domains and ARTs
+// ---------------------------------------------------------------------------
+
+export function makeDomain(name: string): Domain {
+  return { id: newId('domain'), name }
+}
+
+export function makeArt(name: string, domainId: Id | null): Art {
+  return { id: newId('art'), name, domainId }
+}
+
+export function findDomain(project: Project, id: Id | null): Domain | undefined {
+  return id === null ? undefined : project.domains.find((domain) => domain.id === id)
+}
+
+export function findArt(project: Project, id: Id | null): Art | undefined {
+  return id === null ? undefined : project.arts.find((art) => art.id === id)
+}
+
+/** A domain and ART for a team that keep the invariants: both exist or are null, and a
+ *  team on an ART has the ART's domain. The ART wins over the domain. */
+export function fitOrg(project: Project, domainId: Id | null, artId: Id | null): { domainId: Id | null; artId: Id | null } {
+  const art = findArt(project, artId)
+  if (art) return { domainId: findDomain(project, art.domainId)?.id ?? null, artId: art.id }
+  return { domainId: findDomain(project, domainId)?.id ?? null, artId: null }
+}
+
+/** The team's domain and ART, where it has them. */
+export function teamOrg(project: Project, team: Team): { domain: Domain | undefined; art: Art | undefined } {
+  return { domain: findDomain(project, team.domainId), art: findArt(project, team.artId) }
+}
+
+/** "Non-Life · Claims ART", "Management", or '' for a team that belongs to neither. Pass
+ *  ', ' as the separator for text that is read out. */
+export function orgLabel(project: Project, team: Team, separator = ' · '): string {
+  const { domain, art } = teamOrg(project, team)
+  return [domain?.name, art?.name].filter((name): name is string => Boolean(name?.trim())).join(separator)
+}
+
+/** The ARTs of a domain (null: the ARTs on no domain), in the planner's order. */
+export function artsOf(project: Project, domainId: Id | null): Art[] {
+  return project.arts.filter((art) => art.domainId === domainId)
+}
+
+/** The first of the names that is not taken (ignoring case), e.g. "New ART 2". */
+export function freeName(base: string, taken: readonly string[]): string {
+  const used = new Set(taken.map((name) => name.trim().toLowerCase()))
+  if (!used.has(base.toLowerCase())) return base
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base} ${n}`
+    if (!used.has(candidate.toLowerCase())) return candidate
+  }
 }

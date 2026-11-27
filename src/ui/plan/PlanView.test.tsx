@@ -34,7 +34,7 @@ function renderPlan() {
 }
 
 function addExampleTeams() {
-  dispatch({ type: 'team/addMany', teams: exampleTeams(getProject()) })
+  dispatch(exampleTeams(getProject()).action)
 }
 
 function teamNamed(name: string): Team {
@@ -126,7 +126,7 @@ describe('PlanView with example teams', () => {
     expect(screen.getByRole('heading', { name: /^To seat/ }).textContent).toBe('To seat 2')
     expect(screen.queryByRole('heading', { name: /^Seated/ })).toBeNull()
     expect(screen.getByText('Not in on Monday')).toBeTruthy()
-    expect(teamRow('Policy Admin').getAttribute('aria-label')).toBe('Policy Admin, Policy, 0 of 8 seats')
+    expect(teamRow('Policy Admin').getAttribute('aria-label')).toBe('Policy Admin, Non-Life, Policy ART, 0 of 8 seats')
     expect(screen.getByText('2 teams, 14 seats needed')).toBeTruthy()
   })
 
@@ -463,7 +463,7 @@ describe('PlanView with conflicts', () => {
       const risk = project.teams.find((t) => t.name === 'Risk and Compliance')
       if (!admin || !risk) return []
       const conflict: Issue = {
-        id: `area-over-capacity|mon|floor-4|f4-nw1|${admin.id}`,
+        id: `area-over-capacity|mon|-|f4-nw1|-`,
         rule: 'area-over-capacity',
         severity: 'error',
         day: 'mon',
@@ -496,7 +496,7 @@ describe('PlanView with conflicts', () => {
     expect(within(dayButton('Tuesday')).queryByText(/conflict/)).toBeNull()
     expect(screen.getByRole('button', { name: 'Floor 4, 0 of 66 desks taken on Monday, has a conflict' })).toBeTruthy()
     expect(teamRow('Policy Admin').getAttribute('aria-label')).toBe(
-      'Policy Admin, Policy, 0 of 8 seats, has a conflict',
+      'Policy Admin, Non-Life, Policy ART, 0 of 8 seats, has a conflict',
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Conflicts 1' }))

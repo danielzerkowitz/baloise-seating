@@ -99,7 +99,7 @@ function appProject(): Project {
   const ground = makeFloor({ name: 'Ground floor' })
   p = reduce(p, { type: 'floor/add', floor: ground })
   p = reduce(p, { type: 'area/add', floorId: ground.id, area: makeArea(ground, { x: 0.2, y: 0.3, w: 0.25, h: 0.2 }) })
-  p = reduce(p, { type: 'team/addMany', teams: exampleTeams(p) })
+  p = reduce(p, exampleTeams(p).action)
   const intake = nth(p.teams, 0) // Tuesday and Thursday
   const handling = nth(p.teams, 1)
   const underwriting = nth(p.teams, 2) // Tuesday and Wednesday
@@ -116,7 +116,7 @@ function appProject(): Project {
       { type: 'team/update', id: handling.id, patch: { attendance: 0.8, homeFloorId: 'floor-4', notes: 'Near the window.' } },
       { type: 'team/setPlanned', id: handling.id, day: 'fri', planned: true },
       { type: 'settings/update', patch: { attendance: 0.9, reserve: 0.1 } },
-      { type: 'issue/accept', id: `overflow-used|tue|floor-4|-|${handling.id}`, note: 'Agreed', detail: '5 overflow seats' },
+      { type: 'issue/accept', id: `overflow-used|tue|-|-|${handling.id}`, note: 'Agreed', detail: '5 overflow seats' },
     ],
   })
 }
@@ -202,20 +202,20 @@ describe('normalizeProject refuses', () => {
 
   it('a file from a newer version, also when it has another shape', () => {
     const inputs = [
-      { schemaVersion: 2, floors: [], teams: [] },
-      { schemaVersion: 1.5, floors: [], teams: [] },
+      { schemaVersion: 3, floors: [], teams: [] },
+      { schemaVersion: 2.5, floors: [], teams: [] },
       { schemaVersion: Number.POSITIVE_INFINITY, floors: [], teams: [] },
-      { app: 'team-day-planner', schemaVersion: 2, savedAt: 'now', project: { schemaVersion: 1, floors: [], teams: [] } },
-      { app: 'team-day-planner', schemaVersion: 1, savedAt: 'now', project: { schemaVersion: 3, floors: [], teams: [] } },
-      { app: 'team-day-planner', schemaVersion: 2, savedAt: 'now', building: { levels: [] } },
-      { schemaVersion: 2, project: { building: {} } },
+      { app: 'team-day-planner', schemaVersion: 3, savedAt: 'now', project: { schemaVersion: 2, floors: [], teams: [] } },
+      { app: 'team-day-planner', schemaVersion: 2, savedAt: 'now', project: { schemaVersion: 4, floors: [], teams: [] } },
+      { app: 'team-day-planner', schemaVersion: 3, savedAt: 'now', building: { levels: [] } },
+      { schemaVersion: 3, project: { building: {} } },
     ]
     for (const input of inputs) expect(refusal(input)).toBe(newerVersion)
   })
 
-  it('no version that is not a number above 1: the result is always version 1', () => {
-    for (const schemaVersion of [1, 0, -4, '2', null, undefined, Number.NaN, {}, [2]]) {
-      expect(repaired({ schemaVersion, floors: [], teams: [] }).schemaVersion).toBe(1)
+  it('no version that is not a number above 2: the result is always version 2', () => {
+    for (const schemaVersion of [2, 1, 0, -4, '3', null, undefined, Number.NaN, {}, [3]]) {
+      expect(repaired({ schemaVersion, floors: [], teams: [] }).schemaVersion).toBe(2)
     }
   })
 
@@ -395,9 +395,11 @@ describe('normalizeProject repairs text', () => {
     expect(nth(nth(result.floors, 0).areas, 0).name).toBe('a'.repeat(120))
     for (const t of result.teams) {
       expect(t.name).toBe('t'.repeat(120))
-      expect(t.group).toBe('g'.repeat(60))
       expect(t.notes).toBe('x'.repeat(2000))
     }
+    // The old group of both became one domain, its name cut at 60 characters.
+    expect(result.domains.map((d) => d.name)).toEqual(['g'.repeat(60)])
+    expect(result.teams.every((t) => t.domainId === nth(result.domains, 0).id)).toBe(true)
   })
 
   it('leaves no space and no half character where a name was cut', () => {
@@ -407,15 +409,11 @@ describe('normalizeProject repairs text', () => {
     expect(result.teams.map((t) => t.name)).toEqual(['a'.repeat(119), 'a'.repeat(119), `${'a'.repeat(118)}😀`])
   })
 
-  it('keeps notes and groups as typed, and empties those that are not text', () => {
+  it('keeps notes as typed, and empties those that are not text', () => {
     const result = repaired(
-      rawProject([], [{ group: ' Claims ', notes: ' line one\nline two ' }, { group: 7, notes: false }, { group: null, notes: {} }]),
+      rawProject([], [{ notes: ' line one\nline two ' }, { notes: false }, { notes: {} }]),
     )
-    expect(result.teams.map((t) => [t.group, t.notes])).toEqual([
-      [' Claims ', ' line one\nline two '],
-      ['', ''],
-      ['', ''],
-    ])
+    expect(result.teams.map((t) => t.notes)).toEqual([' line one\nline two ', '', ''])
   })
 
   it('cuts floor labels at 3 characters and makes a missing one from the name', () => {
@@ -751,10 +749,32 @@ describe('normalizeProject repairs teams', () => {
     const result = repaired(
       rawProject(
         [rawFloor(3)],
-        [{ days: ['tue'], seating: { a1: 2 }, daySeating: { tue: { a2: 2.4, a3: -1, ghost: 3, a1: 5000 } } }],
+        [{ days: ['tue', 'thu'], seating: { a1: 2 }, daySeating: { tue: { a2: 2.4, a3: -1, ghost: 3, a1: 5000 } } }],
       ),
     )
     expect(nth(result.teams, 0).daySeating).toStrictEqual({ tue: { a2: 2, a1: 1000 } })
+  })
+
+  it('never leaves the normal seating hidden behind a seating of its own on every team day', () => {
+    const result = repaired(
+      rawProject(
+        [rawFloor(3)],
+        [
+          // The only team day has its own seating: that IS where the team sits.
+          { days: ['tue'], seating: { a1: 2 }, daySeating: { tue: { a2: 2 } } },
+          // Both days share one seating of their own: it becomes the normal one.
+          { days: ['tue', 'thu'], seating: { a1: 2 }, daySeating: { tue: { a3: 2 }, thu: { a3: 2 } } },
+          // Two different ones: the one with more seats becomes normal, the other stays.
+          { days: ['tue', 'thu'], seating: { a1: 2 }, daySeating: { tue: {}, thu: { a2: 1 } } },
+        ],
+      ),
+    )
+    expect(result.teams.map((t) => [t.seating, t.daySeating])).toStrictEqual([
+      [{ a2: 2 }, {}],
+      [{ a3: 2 }, {}],
+      [{ a2: 1 }, { tue: {} }],
+    ])
+    expect(violations(result)).toEqual([])
   })
 
   it('ignores exceptions that are not objects', () => {
@@ -799,7 +819,7 @@ describe('normalizeProject repairs settings and accepted issues', () => {
       rawProject([], [], {
         accepted: {
           'wish-unmet|tue|-|-|t1': { note: 'Agreed with the team', detail: 'Tuesday is full' },
-          'overflow-used|mon|f1|-|t2': { note: '', detail: '', by: 'someone', at: 12 },
+          'overflow-used|mon|-|-|t2': { note: '', detail: '', by: 'someone', at: 12 },
           a: { note: 1, detail: 'd' },
           b: { note: 'n' },
           c: { detail: 'd' },
@@ -812,13 +832,37 @@ describe('normalizeProject repairs settings and accepted issues', () => {
     )
     expect(result.accepted).toStrictEqual({
       'wish-unmet|tue|-|-|t1': { note: 'Agreed with the team', detail: 'Tuesday is full' },
-      'overflow-used|mon|f1|-|t2': { note: '', detail: '' },
+      'overflow-used|mon|-|-|t2': { note: '', detail: '' },
     })
   })
 
-  it('cuts the texts of an accepted issue at 500 characters', () => {
+  it('cuts the reason of an accepted issue at 500 characters and keeps its detail whole', () => {
+    // The detail is compared with the issue's text as it is: cut short, the acceptance
+    // would be forgotten on every reload. Its own bound lies far above any real detail.
     const result = repaired(rawProject([], [], { accepted: { id: { note: 'n'.repeat(501), detail: 'd'.repeat(2000) } } }))
-    expect(result.accepted).toStrictEqual({ id: { note: 'n'.repeat(500), detail: 'd'.repeat(500) } })
+    expect(result.accepted).toStrictEqual({ id: { note: 'n'.repeat(500), detail: 'd'.repeat(2000) } })
+    const huge = repaired(rawProject([], [], { accepted: { id: { note: '', detail: 'd'.repeat(6000) } } }))
+    expect(huge.accepted.id?.detail).toHaveLength(5000)
+  })
+
+  it('takes out characters that cannot be stored', () => {
+    // A NUL in any text makes the database refuse the whole plan.
+    const result = repaired(
+      rawProject(
+        [{ name: 'Floor\u0000 4', areas: [{ id: 'a1', name: 'NE\u0000 1' }] }],
+        [{ name: 'Claims\u0000 Intake', group: 'Clai\u0001ms', notes: 'line one\nline\u0000 two', days: [] }],
+        { name: 'Plan\u0000', accepted: { id: { note: 'fine\u0000', detail: 'de\u0000tail' } } },
+      ),
+    )
+    expect(JSON.stringify(result)).not.toMatch(/\\u0000|\\u0001/)
+    expect(nth(result.teams, 0)).toMatchObject({ name: 'Claims Intake', notes: 'line one\nline two' })
+    // The group of a version 1 plan became a domain, without the character.
+    expect(result.domains.map((d) => d.name)).toEqual(['Claims'])
+    expect(nth(result.floors, 0).name).toBe('Floor 4')
+    expect(result.name).toBe('Plan')
+    // Half of a surrogate pair goes as well; a whole pair stays.
+    const pairs = repaired(rawProject([], [{ name: 'Team \ud83d and \ud83d\ude00', days: [] }]))
+    expect(nth(pairs.teams, 0).name).toBe('Team  and \ud83d\ude00')
   })
 
   it('keeps at most 2000 accepted issues', () => {
@@ -846,7 +890,8 @@ describe('normalizeProject on hostile input', () => {
     code: 'T1',
     size: 0,
     color: TEAM_COLORS[0],
-    group: '',
+    domainId: null,
+    artId: null,
     wishes: noWishes,
     days: [],
     attendance: null,
@@ -890,8 +935,10 @@ describe('normalizeProject on hostile input', () => {
       accepted: null,
     })
     expect(result).toStrictEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: 'Office plan',
+      domains: [],
+      arts: [],
       floors: [{ id: expect.any(String), name: 'Floor 1', label: '1', plan: null, areas: [defaultArea] }],
       teams: [defaultTeam],
       settings: { attendance: 1, reserve: 0 },
@@ -932,8 +979,10 @@ describe('normalizeProject on hostile input', () => {
       accepted: 'none',
     })
     expect(result).toStrictEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: 'Office plan',
+      domains: [],
+      arts: [],
       floors: [
         { id: expect.any(String), name: 'Floor 1', label: '1', plan: null, areas: [] },
         { id: expect.any(String), name: 'Floor 2', label: '2', plan: null, areas: [defaultArea] },
@@ -1188,12 +1237,12 @@ describe('normalizeProject under random damage', () => {
     ],
     [
       team('t1', 6, ['mon', 'wed'], { a1: 4, a2: 2 }, { daySeating: { wed: { b1: 4 } }, homeFloorId: 'f1', attendance: 0.8 }),
-      team('t2', 4, ['tue'], { b1: 4 }, { group: 'Claims', notes: 'Close to the door' }),
+      team('t2', 4, ['tue'], { b1: 4 }, { domainId: 'claims', artId: 'intake', notes: 'Close to the door' }),
       team('t3', 9, ['mon', 'tue', 'fri'], { a2: 4, bench: 5 }, { daySeating: { fri: {} } }),
     ],
     { attendance: 0.9, reserve: 0.1 },
   )
-  base.accepted = { 'overflow-used|mon|f2|-|t3': { note: 'Fine for now', detail: '5 overflow seats' } }
+  base.accepted = { 'overflow-used|mon|-|-|t3': { note: 'Fine for now', detail: '5 overflow seats' } }
   const baseText = JSON.stringify(base)
 
   /** Checks one damaged input; returns whether it was accepted. */
@@ -1266,21 +1315,21 @@ describe('serializeProject', () => {
   it('writes the envelope with its keys in a fixed order', () => {
     const envelope = JSON.parse(serializeProject(p, savedAt)) as Record<string, unknown>
     expect(Object.keys(envelope)).toEqual(['app', 'schemaVersion', 'savedAt', 'project'])
-    expect(envelope).toStrictEqual({ app: 'team-day-planner', schemaVersion: 1, savedAt: '2026-11-27T09:30:00.000Z', project: p })
+    expect(envelope).toStrictEqual({ app: 'team-day-planner', schemaVersion: 2, savedAt: '2026-11-27T09:30:00.000Z', project: p })
   })
 
   it('indents with two spaces', () => {
     const text = serializeProject(p, savedAt)
     expect(text).toBe(
-      JSON.stringify({ app: 'team-day-planner', schemaVersion: 1, savedAt: '2026-11-27T09:30:00.000Z', project: p }, null, 2),
+      JSON.stringify({ app: 'team-day-planner', schemaVersion: 2, savedAt: '2026-11-27T09:30:00.000Z', project: p }, null, 2),
     )
     expect(text.split('\n').slice(0, 6)).toEqual([
       '{',
       '  "app": "team-day-planner",',
-      '  "schemaVersion": 1,',
+      '  "schemaVersion": 2,',
       '  "savedAt": "2026-11-27T09:30:00.000Z",',
       '  "project": {',
-      '    "schemaVersion": 1,',
+      '    "schemaVersion": 2,',
     ])
   })
 
@@ -1325,7 +1374,7 @@ describe('parseProjectFile', () => {
     for (const text of ['null', '42', '"text"', '[]', '{}', '{ "floors": [] }', '{ "project": 5 }']) {
       expect(parseProjectFile(text)).toStrictEqual({ ok: false, error: 'This is not a planner file.' })
     }
-    expect(parseProjectFile('{ "schemaVersion": 2, "project": { "floors": [], "teams": [] } }')).toStrictEqual({
+    expect(parseProjectFile('{ "schemaVersion": 3, "project": { "floors": [], "teams": [] } }')).toStrictEqual({
       ok: false,
       error: 'This file was made with a newer version of the planner. Update the planner to open it.',
     })
@@ -1350,7 +1399,7 @@ describe('parseProjectFile', () => {
 // ---------------------------------------------------------------------------
 
 describe('seatingCsv', () => {
-  const header = 'Day,Team,Code,Group,People,Seats needed,Floor,Area,Seats'
+  const header = 'Day,Team,Code,Domain,ART,People,Seats needed,Floor,Area,Seats'
 
   /** Reads CSV text back into rows of cells the way a spreadsheet does. */
   function readCsv(csv: string): string[][] {
@@ -1404,7 +1453,7 @@ describe('seatingCsv', () => {
   it('starts with a byte order mark and ends every line with CRLF', () => {
     const csv = seatingCsv(project([floor('f1', [area('a1', 4)])], [team('alpha', 3, ['mon'], { a1: 3 })]))
     expect(csv.charCodeAt(0)).toBe(0xfeff)
-    expect(csv).toBe(`\uFEFF${header}\r\nMonday,Alpha,ALP,,3,3,Floor f1,A1,3\r\n`)
+    expect(csv).toBe(`\uFEFF${header}\r\nMonday,Alpha,ALP,,,3,3,Floor f1,A1,3\r\n`)
   })
 
   it('orders rows by weekday, then team, then floor, then area', () => {
@@ -1415,19 +1464,19 @@ describe('seatingCsv', () => {
       ],
       [
         // Days and seats are given out of order on purpose.
-        team('beta', 6, ['tue', 'mon'], { b1: 3, a2: 2, a1: 1 }, { group: 'Claims' }),
+        team('beta', 6, ['tue', 'mon'], { b1: 3, a2: 2, a1: 1 }, { domainId: 'Claims', artId: 'Intake ART' }),
         team('alpha', 3, ['mon'], { a1: 3 }),
       ],
     )
     expect(lines(seatingCsv(p))).toEqual([
       header,
-      'Monday,Beta,BET,Claims,6,6,First floor,A1,1',
-      'Monday,Beta,BET,Claims,6,6,First floor,A2,2',
-      'Monday,Beta,BET,Claims,6,6,Second floor,B1,3',
-      'Monday,Alpha,ALP,,3,3,First floor,A1,3',
-      'Tuesday,Beta,BET,Claims,6,6,First floor,A1,1',
-      'Tuesday,Beta,BET,Claims,6,6,First floor,A2,2',
-      'Tuesday,Beta,BET,Claims,6,6,Second floor,B1,3',
+      'Monday,Beta,BET,Claims,Intake ART,6,6,First floor,A1,1',
+      'Monday,Beta,BET,Claims,Intake ART,6,6,First floor,A2,2',
+      'Monday,Beta,BET,Claims,Intake ART,6,6,Second floor,B1,3',
+      'Monday,Alpha,ALP,,,3,3,First floor,A1,3',
+      'Tuesday,Beta,BET,Claims,Intake ART,6,6,First floor,A1,1',
+      'Tuesday,Beta,BET,Claims,Intake ART,6,6,First floor,A2,2',
+      'Tuesday,Beta,BET,Claims,Intake ART,6,6,Second floor,B1,3',
     ])
   })
 
@@ -1449,11 +1498,11 @@ describe('seatingCsv', () => {
     )
     expect(lines(seatingCsv(p))).toEqual([
       header,
-      'Monday,Alpha,ALP,,5,5,,,0',
-      'Monday,Beta,BET,,2,2,First floor,A1,2',
-      'Wednesday,Alpha,ALP,,5,5,,,0',
-      'Wednesday,Beta,BET,,2,2,,,0',
-      'Wednesday,Gamma,GAM,,2,2,,,0',
+      'Monday,Alpha,ALP,,,5,5,,,0',
+      'Monday,Beta,BET,,,2,2,First floor,A1,2',
+      'Wednesday,Alpha,ALP,,,5,5,,,0',
+      'Wednesday,Beta,BET,,,2,2,,,0',
+      'Wednesday,Gamma,GAM,,,2,2,,,0',
     ])
   })
 
@@ -1464,8 +1513,8 @@ describe('seatingCsv', () => {
     )
     expect(lines(seatingCsv(p))).toEqual([
       header,
-      'Tuesday,Alpha,ALP,,4,4,First floor,A1,4',
-      'Thursday,Alpha,ALP,,4,4,First floor,A2,3',
+      'Tuesday,Alpha,ALP,,,4,4,First floor,A1,4',
+      'Thursday,Alpha,ALP,,,4,4,First floor,A2,3',
     ])
   })
 
@@ -1475,44 +1524,44 @@ describe('seatingCsv', () => {
       [team('alpha', 10, ['mon'], { a1: 5 }), team('beta', 10, ['mon'], { a1: 8 }, { attendance: 0.8 })],
       { attendance: 0.5 },
     )
-    expect(lines(seatingCsv(p)).slice(1)).toEqual(['Monday,Alpha,ALP,,10,5,Floor f1,A1,5', 'Monday,Beta,BET,,10,8,Floor f1,A1,8'])
+    expect(lines(seatingCsv(p)).slice(1)).toEqual(['Monday,Alpha,ALP,,,10,5,Floor f1,A1,5', 'Monday,Beta,BET,,,10,8,Floor f1,A1,8'])
   })
 
   it('quotes fields with a comma, a quote or a line break, doubling the quotes', () => {
     const p = project(
       [floor('f1', [area('a1', 4, { name: 'North\nwing' })], { name: 'Floor 1, east' })],
-      [team('alpha', 3, ['mon'], { a1: 3 }, { name: 'Claims "Intake"', code: 'C,I', group: 'Line one\r\nline two' })],
+      [team('alpha', 3, ['mon'], { a1: 3 }, { name: 'Claims "Intake"', code: 'C,I', domainId: 'Line one\r\nline two' })],
     )
     const csv = seatingCsv(p)
     expect(csv).toBe(
-      `\uFEFF${header}\r\n` + 'Monday,"Claims ""Intake""","C,I","Line one\r\nline two",3,3,"Floor 1, east","North\nwing",3\r\n',
+      `\uFEFF${header}\r\n` + 'Monday,"Claims ""Intake""","C,I","Line one\r\nline two",,3,3,"Floor 1, east","North\nwing",3\r\n',
     )
     expect(readCsv(csv)).toEqual([
       header.split(','),
-      ['Monday', 'Claims "Intake"', 'C,I', 'Line one\r\nline two', '3', '3', 'Floor 1, east', 'North\nwing', '3'],
+      ['Monday', 'Claims "Intake"', 'C,I', 'Line one\r\nline two', '', '3', '3', 'Floor 1, east', 'North\nwing', '3'],
     ])
   })
 
   it('does not quote what needs no quotes', () => {
     const p = project(
       [floor('f1', [area('a1', 4, { name: "Team's corner; left" })])],
-      [team('alpha', 3, ['mon'], { a1: 3 }, { name: 'Zürich équipe 4', group: 'A = B' })],
+      [team('alpha', 3, ['mon'], { a1: 3 }, { name: 'Zürich équipe 4', artId: 'A = B' })],
     )
-    expect(lines(seatingCsv(p))[1]).toBe("Monday,Zürich équipe 4,ALP,A = B,3,3,Floor f1,Team's corner; left,3")
+    expect(lines(seatingCsv(p))[1]).toBe("Monday,Zürich équipe 4,ALP,,A = B,3,3,Floor f1,Team's corner; left,3")
   })
 
   it('keeps a spreadsheet from running a text field as a formula', () => {
     const names = ['=SUM(A1:A9)', '+31 20 123', '-1 team', '@home', '\t=1+1', '\r=1+1', '=HYPERLINK("http://evil","x"),1']
     const p = project(
       [floor('f1', [area('a1', 40, { name: '+Extra' })], { name: '-1 Basement' })],
-      names.map((name, i) => team(`t${i}`, 1, ['mon'], { a1: 1 }, { name, code: '=1', group: '@ops' })),
+      names.map((name, i) => team(`t${i}`, 1, ['mon'], { a1: 1 }, { name, code: '=1', domainId: '@ops', artId: '-ART' })),
     )
     const rows = readCsv(seatingCsv(p)).slice(1)
     expect(rows.map((row) => row[1])).toEqual(names.map((name) => `'${name}`))
     for (const row of rows) {
-      expect(row).toHaveLength(9)
-      expect(row.slice(2, 4)).toEqual(["'=1", "'@ops"])
-      expect(row.slice(6, 8)).toEqual(["'-1 Basement", "'+Extra"])
+      expect(row).toHaveLength(10)
+      expect(row.slice(2, 5)).toEqual(["'=1", "'@ops", "'-ART"])
+      expect(row.slice(7, 9)).toEqual(["'-1 Basement", "'+Extra"])
       // No cell starts with a character that begins a formula.
       for (const cell of row) expect(cell).not.toMatch(/^[=+\-@\t\r]/)
     }
@@ -1522,9 +1571,9 @@ describe('seatingCsv', () => {
   it('leaves text alone that merely contains such a character, and numbers always', () => {
     const p = project(
       [floor('f1', [area('a1', 4, { name: 'A-1' })], { name: 'Floor +1' })],
-      [team('alpha', 0, ['mon'], {}, { name: 'R&D = fun', code: 'A@B', group: 'x-y' })],
+      [team('alpha', 0, ['mon'], {}, { name: 'R&D = fun', code: 'A@B', domainId: 'x-y' })],
     )
-    expect(lines(seatingCsv(p))[1]).toBe('Monday,R&D = fun,A@B,x-y,0,0,,,0')
+    expect(lines(seatingCsv(p))[1]).toBe('Monday,R&D = fun,A@B,x-y,,0,0,,,0')
   })
 
   it('writes any text so that it comes back as one cell (300 random names)', () => {
@@ -1533,7 +1582,7 @@ describe('seatingCsv', () => {
     const names = Array.from({ length: 300 }, () => randomText(random, pieces, 1 + Math.floor(random() * 12)))
     const p = project(
       [floor('f1', [area('a1', 1000)])],
-      names.map((name, i) => team(`t${i}`, 1, ['mon'], { a1: 1 }, { name, code: name.slice(0, 4), group: name })),
+      names.map((name, i) => team(`t${i}`, 1, ['mon'], { a1: 1 }, { name, code: name.slice(0, 4), domainId: name })),
     )
     /** The cell a spreadsheet must show for a text: the text itself, kept from being a formula. */
     const cell = (text: string) => (/^[=+\-@\t\r]/.test(text) ? `'${text}` : text)
@@ -1542,17 +1591,17 @@ describe('seatingCsv', () => {
     expect(rows).toHaveLength(300)
     rows.forEach((row, i) => {
       const name = nth(names, i)
-      expect(row, JSON.stringify(name)).toEqual(['Monday', cell(name), cell(name.slice(0, 4)), cell(name), '1', '1', 'Floor f1', 'A1', '1'])
+      expect(row, JSON.stringify(name)).toEqual(['Monday', cell(name), cell(name.slice(0, 4)), cell(name), '', '1', '1', 'Floor f1', 'A1', '1'])
     })
   })
 
-  it('writes nine cells in every row of a real plan', () => {
+  it('writes ten cells in every row of a real plan', () => {
     const rows = readCsv(seatingCsv(appProject()))
     // The header, a row for each of the 20 team days, and 4 more for the days on which a
     // team sits in more than one area (Claims Intake in two and three, Underwriting in two).
     expect(rows).toHaveLength(1 + 20 + 4)
-    for (const row of rows) expect(row).toHaveLength(9)
-    expect(rows.filter((row) => row[1] === 'Claims Intake').map((row) => [row[0], row[7], row[8]])).toEqual([
+    for (const row of rows) expect(row).toHaveLength(10)
+    expect(rows.filter((row) => row[1] === 'Claims Intake').map((row) => [row[0], row[8], row[9]])).toEqual([
       ['Tuesday', 'NW 1', '6'],
       ['Tuesday', 'NW 2', '3'],
       ['Thursday', 'NW 1', '6'],
@@ -1592,8 +1641,8 @@ describe('parseTeamsText', () => {
   it('reads lines separated by tabs, as copied from a spreadsheet', () => {
     expect(parseTeamsText('Claims Intake\t9\tTue Thu\tClaims\nUnderwriting\t10\tdi/do\tPolicy')).toStrictEqual({
       rows: [
-        { name: 'Claims Intake', size: 9, days: ['tue', 'thu'], group: 'Claims', line: 1 },
-        { name: 'Underwriting', size: 10, days: ['tue', 'thu'], group: 'Policy', line: 2 },
+        { name: 'Claims Intake', size: 9, days: ['tue', 'thu'], domain: 'Claims', art: '', line: 1 },
+        { name: 'Underwriting', size: 10, days: ['tue', 'thu'], domain: 'Policy', art: '', line: 2 },
       ],
       problems: [],
     })
@@ -1602,8 +1651,8 @@ describe('parseTeamsText', () => {
   it('reads lines separated by semicolons', () => {
     expect(parseTeamsText('Claims Intake;9;Tue, Thu;Claims\nData Platform ; 6 ;; Digital')).toStrictEqual({
       rows: [
-        { name: 'Claims Intake', size: 9, days: ['tue', 'thu'], group: 'Claims', line: 1 },
-        { name: 'Data Platform', size: 6, days: [], group: 'Digital', line: 2 },
+        { name: 'Claims Intake', size: 9, days: ['tue', 'thu'], domain: 'Claims', art: '', line: 1 },
+        { name: 'Data Platform', size: 6, days: [], domain: 'Digital', art: '', line: 2 },
       ],
       problems: [],
     })
@@ -1612,8 +1661,8 @@ describe('parseTeamsText', () => {
   it('reads lines separated by commas, where each day is a field of its own', () => {
     expect(parseTeamsText('Claims Intake, 9, Tue, Thu, Claims\nArchitecture,4')).toStrictEqual({
       rows: [
-        { name: 'Claims Intake', size: 9, days: ['tue', 'thu'], group: 'Claims', line: 1 },
-        { name: 'Architecture', size: 4, days: [], group: '', line: 2 },
+        { name: 'Claims Intake', size: 9, days: ['tue', 'thu'], domain: 'Claims', art: '', line: 1 },
+        { name: 'Architecture', size: 4, days: [], domain: '', art: '', line: 2 },
       ],
       problems: [],
     })
@@ -1623,8 +1672,8 @@ describe('parseTeamsText', () => {
     const { rows, problems } = parseTeamsText('Smith, Jones; Co\t12\tMon; Wed\nSmith, Brown & Co;7;Mon, Wed')
     expect(problems).toEqual([])
     expect(rows).toStrictEqual([
-      { name: 'Smith, Jones; Co', size: 12, days: ['mon', 'wed'], group: '', line: 1 },
-      { name: 'Smith, Brown & Co', size: 7, days: ['mon', 'wed'], group: '', line: 2 },
+      { name: 'Smith, Jones; Co', size: 12, days: ['mon', 'wed'], domain: '', art: '', line: 1 },
+      { name: 'Smith, Brown & Co', size: 7, days: ['mon', 'wed'], domain: '', art: '', line: 2 },
     ])
   })
 
@@ -1667,7 +1716,7 @@ describe('parseTeamsText', () => {
     ]
     for (const header of headers) {
       expect(parseTeamsText(`${header}\nClaims Intake\t9\tTue`), header).toStrictEqual({
-        rows: [{ name: 'Claims Intake', size: 9, days: ['tue'], group: '', line: 2 }],
+        rows: [{ name: 'Claims Intake', size: 9, days: ['tue'], domain: '', art: '', line: 2 }],
         problems: [],
       })
     }
@@ -1675,21 +1724,21 @@ describe('parseTeamsText', () => {
 
   it('finds the header after blank lines, but only as the first line with text', () => {
     expect(parseTeamsText('\n\nTeam;Size\nAlpha;5')).toStrictEqual({
-      rows: [{ name: 'Alpha', size: 5, days: [], group: '', line: 4 }],
+      rows: [{ name: 'Alpha', size: 5, days: [], domain: '', art: '', line: 4 }],
       problems: [],
     })
     expect(parseTeamsText('Alpha;5\nTeam;Size').problems).toEqual(['Line 2: no team size found for Team'])
   })
 
   it('does not take a first line for a header when it has a number', () => {
-    expect(parseTeamsText('Team 1;5').rows).toStrictEqual([{ name: 'Team 1', size: 5, days: [], group: '', line: 1 }])
-    expect(parseTeamsText('People;12;Mon').rows).toStrictEqual([{ name: 'People', size: 12, days: ['mon'], group: '', line: 1 }])
+    expect(parseTeamsText('Team 1;5').rows).toStrictEqual([{ name: 'Team 1', size: 5, days: [], domain: '', art: '', line: 1 }])
+    expect(parseTeamsText('People;12;Mon').rows).toStrictEqual([{ name: 'People', size: 12, days: ['mon'], domain: '', art: '', line: 1 }])
     expect(parseTeamsText('Team;Size (max 5000)').problems).toEqual(['Line 1: no team size found for Team'])
   })
 
   it('reports a first line that is a team without a size instead of taking it for a header', () => {
     expect(parseTeamsText('Claims Intake\nUnderwriting;10')).toStrictEqual({
-      rows: [{ name: 'Underwriting', size: 10, days: [], group: '', line: 2 }],
+      rows: [{ name: 'Underwriting', size: 10, days: [], domain: '', art: '', line: 2 }],
       problems: ['Line 1: no team size found for Claims Intake'],
     })
     expect(parseTeamsText('Team Rocket;Claims unit').problems).toEqual(['Line 1: no team size found for Team Rocket'])
@@ -1758,14 +1807,14 @@ describe('parseTeamsText', () => {
   })
 
   it('does not take a hyphen between days: "Tue-Thu" could be two days or three', () => {
-    expect(parseTeamsText('Alpha;8;Tue-Thu').rows).toStrictEqual([{ name: 'Alpha', size: 8, days: [], group: 'Tue-Thu', line: 1 }])
+    expect(parseTeamsText('Alpha;8;Tue-Thu').rows).toStrictEqual([{ name: 'Alpha', size: 8, days: [], domain: 'Tue-Thu', art: '', line: 1 }])
   })
 
   it('merges several day fields, each day once, in week order', () => {
     expect(nth(parseTeamsText('Alpha\t8\tThu\tMon\tThu, Tue').rows, 0).days).toEqual(['mon', 'tue', 'thu'])
     // The days may come before the size.
     expect(parseTeamsText('Alpha;Fri Mon;8;Claims').rows).toStrictEqual([
-      { name: 'Alpha', size: 8, days: ['mon', 'fri'], group: 'Claims', line: 1 },
+      { name: 'Alpha', size: 8, days: ['mon', 'fri'], domain: 'Claims', art: '', line: 1 },
     ])
   })
 
@@ -1773,19 +1822,19 @@ describe('parseTeamsText', () => {
     const group = (field: string) => {
       const row = nth(parseTeamsText(`Alpha;8;${field}`).rows, 0)
       expect(row.days, field).toEqual([])
-      return row.group
+      return row.domain
     }
     for (const name of ['Marketing', 'Monday crew', 'Mon Sat', 'Friends', 'Dimanche', 'Sales and Marketing', 'and', 'Wed 2', 'Mo-Fr', 'x']) {
       expect(group(name)).toBe(name)
     }
   })
 
-  it('takes the first other field as the group', () => {
-    const { rows, problems } = parseTeamsText('Alpha\t8\t\tTue\tClaims\tSecond floor\nBeta;B2B;7;Thu;Later')
+  it('takes the first other field as the domain and the second as the ART, and no more', () => {
+    const { rows, problems } = parseTeamsText('Alpha\t8\t\tTue\tClaims\tSecond floor\tthird\nBeta;B2B;7;Thu;Later')
     expect(problems).toEqual([])
     expect(rows).toStrictEqual([
-      { name: 'Alpha', size: 8, days: ['tue'], group: 'Claims', line: 1 },
-      { name: 'Beta', size: 7, days: ['thu'], group: 'B2B', line: 2 },
+      { name: 'Alpha', size: 8, days: ['tue'], domain: 'Claims', art: 'Second floor', line: 1 },
+      { name: 'Beta', size: 7, days: ['thu'], domain: 'B2B', art: 'Later', line: 2 },
     ])
   })
 
@@ -1805,9 +1854,9 @@ describe('parseTeamsText', () => {
 
   it('takes the first field after the name that starts with a number as the size', () => {
     expect(parseTeamsText('24/7 Support;Tue;6;12').rows).toStrictEqual([
-      { name: '24/7 Support', size: 6, days: ['tue'], group: '12', line: 1 },
+      { name: '24/7 Support', size: 6, days: ['tue'], domain: '12', art: '', line: 1 },
     ])
-    expect(parseTeamsText('Alpha;v2;3rd line;9').rows).toStrictEqual([{ name: 'Alpha', size: 3, days: [], group: 'v2', line: 1 }])
+    expect(parseTeamsText('Alpha;v2;3rd line;9').rows).toStrictEqual([{ name: 'Alpha', size: 3, days: [], domain: 'v2', art: '9', line: 1 }])
   })
 
   it('reports a line without a size', () => {
@@ -1832,7 +1881,7 @@ describe('parseTeamsText', () => {
 
   it('reports a line without a name', () => {
     expect(parseTeamsText(';9;Tue\n\t12\n"";3\nAlpha;4')).toStrictEqual({
-      rows: [{ name: 'Alpha', size: 4, days: [], group: '', line: 4 }],
+      rows: [{ name: 'Alpha', size: 4, days: [], domain: '', art: '', line: 4 }],
       problems: ['Line 1: no team name found', 'Line 2: no team name found', 'Line 3: no team name found'],
     })
   })
@@ -1842,7 +1891,7 @@ describe('parseTeamsText', () => {
     const { rows, problems } = parseTeamsText(text)
     expect(problems).toEqual(['Line 7: Claims Intake appears twice; the second one was skipped'])
     expect(rows.filter((row) => row.name === 'Claims Intake')).toStrictEqual([
-      { name: 'Claims Intake', size: 9, days: ['tue'], group: '', line: 2 },
+      { name: 'Claims Intake', size: 9, days: ['tue'], domain: '', art: '', line: 2 },
     ])
     expect(rows).toHaveLength(5)
   })
@@ -1850,8 +1899,8 @@ describe('parseTeamsText', () => {
   it('compares names without regard to case and to spaces around them', () => {
     expect(parseTeamsText('Claims Intake;9\n  CLAIMS intake  ;4\nclaims  intake;5')).toStrictEqual({
       rows: [
-        { name: 'Claims Intake', size: 9, days: [], group: '', line: 1 },
-        { name: 'claims  intake', size: 5, days: [], group: '', line: 3 },
+        { name: 'Claims Intake', size: 9, days: [], domain: '', art: '', line: 1 },
+        { name: 'claims  intake', size: 5, days: [], domain: '', art: '', line: 3 },
       ],
       problems: ['Line 2: CLAIMS intake appears twice; the second one was skipped'],
     })
@@ -1859,22 +1908,22 @@ describe('parseTeamsText', () => {
 
   it('does not count a line that could not be used as the first of two', () => {
     expect(parseTeamsText('Alpha\nAlpha;5')).toStrictEqual({
-      rows: [{ name: 'Alpha', size: 5, days: [], group: '', line: 2 }],
+      rows: [{ name: 'Alpha', size: 5, days: [], domain: '', art: '', line: 2 }],
       problems: ['Line 1: no team size found for Alpha'],
     })
   })
 
   it('strips quotes around fields and reads quoted fields that contain the separator', () => {
     expect(parseTeamsText('"Claims, Intake",9,"Tue, Thu",Claims').rows).toStrictEqual([
-      { name: 'Claims, Intake', size: 9, days: ['tue', 'thu'], group: 'Claims', line: 1 },
+      { name: 'Claims, Intake', size: 9, days: ['tue', 'thu'], domain: 'Claims', art: '', line: 1 },
     ])
     expect(parseTeamsText('"Claims, Intake";"9";"Tue, Thu";"Claims; Policy"').rows).toStrictEqual([
-      { name: 'Claims, Intake', size: 9, days: ['tue', 'thu'], group: 'Claims; Policy', line: 1 },
+      { name: 'Claims, Intake', size: 9, days: ['tue', 'thu'], domain: 'Claims; Policy', art: '', line: 1 },
     ])
     expect(parseTeamsText("'Alpha';'8';'Tue';'Claims'").rows).toStrictEqual([
-      { name: 'Alpha', size: 8, days: ['tue'], group: 'Claims', line: 1 },
+      { name: 'Alpha', size: 8, days: ['tue'], domain: 'Claims', art: '', line: 1 },
     ])
-    expect(parseTeamsText(' "Alpha" \t "8" ').rows).toStrictEqual([{ name: 'Alpha', size: 8, days: [], group: '', line: 1 }])
+    expect(parseTeamsText(' "Alpha" \t "8" ').rows).toStrictEqual([{ name: 'Alpha', size: 8, days: [], domain: '', art: '', line: 1 }])
   })
 
   it('reads a doubled quote inside a quoted field as one quote, and other quotes as they are', () => {
@@ -1884,10 +1933,20 @@ describe('parseTeamsText', () => {
     expect(nth(parseTeamsText("'t Kantoor;3").rows, 0).name).toBe("'t Kantoor")
   })
 
-  it('cuts a name at 120 characters and a group at 60', () => {
-    const row = nth(parseTeamsText(`${'n'.repeat(300)};5;${'g'.repeat(300)}`).rows, 0)
+  it('cuts a name at 120 characters and a domain and an ART at 60', () => {
+    const row = nth(parseTeamsText(`${'n'.repeat(300)};5;${'d'.repeat(300)};${'a'.repeat(300)}`).rows, 0)
     expect(row.name).toBe('n'.repeat(120))
-    expect(row.group).toBe('g'.repeat(60))
+    expect(row.domain).toBe('d'.repeat(60))
+    expect(row.art).toBe('a'.repeat(60))
+  })
+
+  it('reads the first text after the size as the domain and the second as the ART', () => {
+    const { rows } = parseTeamsText('Claims Intake;9;Tue Thu;Non-Life;Claims ART\nBoard;3;Non-Life\nLoose;2;Mon')
+    expect(rows.map((row) => [row.name, row.days, row.domain, row.art])).toEqual([
+      ['Claims Intake', ['tue', 'thu'], 'Non-Life', 'Claims ART'],
+      ['Board', [], 'Non-Life', ''],
+      ['Loose', ['mon'], '', ''],
+    ])
   })
 
   it('reads at most 500 teams and says so when there are more', () => {
@@ -1899,7 +1958,7 @@ describe('parseTeamsText', () => {
 
     const more = parseTeamsText(teamLines(640))
     expect(more.rows).toHaveLength(500)
-    expect(nth(more.rows, 499)).toStrictEqual({ name: 'Team 500', size: 8, days: ['tue'], group: '', line: 500 })
+    expect(nth(more.rows, 499)).toStrictEqual({ name: 'Team 500', size: 8, days: ['tue'], domain: '', art: '', line: 500 })
     expect(more.problems).toEqual(['Line 501: more than 500 teams were pasted; this line and everything after it was skipped'])
   })
 
@@ -1938,7 +1997,8 @@ describe('parseTeamsText', () => {
         expect(row.name.length, what).toBeLessThanOrEqual(120)
         expect(Number.isInteger(row.size) && row.size >= 0 && row.size <= 5000, what).toBe(true)
         expect(row.days, what).toEqual(WEEKDAYS.filter((day) => row.days.includes(day)))
-        expect(row.group.length, what).toBeLessThanOrEqual(60)
+        expect(row.domain.length, what).toBeLessThanOrEqual(60)
+        expect(row.art.length, what).toBeLessThanOrEqual(60)
         expect(row.line >= 1 && row.line <= lineCount, what).toBe(true)
       }
       // No name twice, and the rows in the order of their lines.
@@ -1977,19 +2037,60 @@ describe('seatingCsv with semicolons', () => {
   it('separates with semicolons and quotes a name that contains one', () => {
     const p = project(
       [floor('f1', [area('a1', 4)], { name: 'Floor 1' })],
-      [team('alpha', 3, ['mon'], { a1: 3 }, { name: 'Claims; intake', code: 'CI', group: 'Claims, north' })],
+      [team('alpha', 3, ['mon'], { a1: 3 }, { name: 'Claims; intake', code: 'CI', domainId: 'Claims, north' })],
     )
     const lines = seatingCsv(p, ';').split('\r\n')
-    expect(nth(lines, 0)).toBe('\uFEFFDay;Team;Code;Group;People;Seats needed;Floor;Area;Seats')
-    // The semicolon in the name needs quotes now; the comma in the group no longer does.
-    expect(nth(lines, 1)).toBe('Monday;"Claims; intake";CI;Claims, north;3;3;Floor 1;A1;3')
+    expect(nth(lines, 0)).toBe('\uFEFFDay;Team;Code;Domain;ART;People;Seats needed;Floor;Area;Seats')
+    // The semicolon in the name needs quotes now; the comma in the domain no longer does.
+    expect(nth(lines, 1)).toBe('Monday;"Claims; intake";CI;Claims, north;;3;3;Floor 1;A1;3')
   })
 
   it('still separates with commas by default', () => {
     const p = project(
       [floor('f1', [area('a1', 4)], { name: 'Floor 1' })],
-      [team('alpha', 3, ['mon'], { a1: 3 }, { name: 'Claims; intake', code: 'CI', group: 'Claims, north' })],
+      [team('alpha', 3, ['mon'], { a1: 3 }, { name: 'Claims; intake', code: 'CI', domainId: 'Claims, north' })],
     )
-    expect(nth(seatingCsv(p).split('\r\n'), 1)).toBe('Monday,Claims; intake,CI,"Claims, north",3,3,Floor 1,A1,3')
+    expect(nth(seatingCsv(p).split('\r\n'), 1)).toBe('Monday,Claims; intake,CI,"Claims, north",,3,3,Floor 1,A1,3')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Pasted team lists: found in review
+// ---------------------------------------------------------------------------
+
+describe('parseTeamsText on what spreadsheets really copy', () => {
+  it('keeps a cell with a line break in it as one cell', () => {
+    // Excel copies a two-line cell inside quotes, with the line break in it.
+    const pasted = '"Claims\nIntake"\t9\tTue\nUnderwriting\t10\tWed'
+    expect(parseTeamsText(pasted)).toStrictEqual({
+      rows: [
+        { name: 'Claims Intake', size: 9, days: ['tue'], domain: '', art: '', line: 1 },
+        // Line numbers count the lines of the text, so this team starts on line 3.
+        { name: 'Underwriting', size: 10, days: ['wed'], domain: '', art: '', line: 3 },
+      ],
+      problems: [],
+    })
+  })
+
+  it('reads line by line when a quote is never closed, so one bad line does not swallow the rest', () => {
+    const pasted = '"Claims Intake\t9\tTue\nUnderwriting\t10\tWed'
+    const { rows, problems } = parseTeamsText(pasted)
+    // The line with the open quote is reported; the next line is a team of its own.
+    expect(rows.map((row) => [row.name, row.size, row.line])).toEqual([['Underwriting', 10, 2]])
+    expect(problems).toHaveLength(1)
+    expect(nth(problems, 0)).toMatch(/^Line 1:/)
+  })
+
+  it('takes plural day names for days', () => {
+    const { rows } = parseTeamsText('Claims Intake\t9\tTuesdays and Thursdays\tClaims\nPolicy\t8\tdinsdagen en donderdagen')
+    expect(rows.map((row) => [row.days, row.domain])).toEqual([
+      [['tue', 'thu'], 'Claims'],
+      [['tue', 'thu'], ''],
+    ])
+  })
+
+  it('takes characters out of a name that cannot be stored', () => {
+    const { rows } = parseTeamsText('Claims\u0000 Intake\t9\tTue')
+    expect(nth(rows, 0).name).toBe('Claims Intake')
   })
 })

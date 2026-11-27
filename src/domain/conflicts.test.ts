@@ -80,21 +80,57 @@ function ofRule(p: Project, ...rules: IssueRule[]): Issue[] {
   return findIssues(p).filter((issue) => rules.includes(issue.rule))
 }
 
-function ids(issues: readonly Issue[]): string[] {
-  return issues.map((issue) => issue.id)
+/** What an issue is about, written the short way: `rule|day|floor|area|teams` with "-" for
+ *  a missing part and teams joined by "+". The tests spell issues out like this because it
+ *  fixes the rule, day, floor, area and teams an issue must carry in one string. */
+function subjectOf(issue: Issue): string {
+  return [issue.rule, issue.day ?? '-', issue.floorId ?? '-', issue.areaId ?? '-', issue.teamIds.join('+') || '-'].join('|')
 }
 
-/** A complete issue written the short way. The id is `rule|day|floor|area|teams` with "-"
- *  for a missing part and teams joined by "+", so spelling it out also fixes the rule, day,
- *  floor, area and teams the issue must carry. */
-function anIssue(id: string, severity: Severity, title: string, detail: string): Issue {
-  const [rule, day, floorId, areaId, teams] = id.split('|')
+function subjects(issues: readonly Issue[]): string[] {
+  return issues.map(subjectOf)
+}
+
+/** Which parts of a subject make up the id, per rule: [floor, area, teams]. An id only names
+ *  what the problem is about, so that it stays the same while the problem persists. */
+const IN_THE_ID: Record<IssueRule, readonly [boolean, boolean, boolean]> = {
+  'area-over-capacity': [false, true, false],
+  'seats-in-room': [false, true, true],
+  'day-over-capacity': [false, false, false],
+  'day-needs-overflow': [false, false, false],
+  'day-uses-reserve': [false, false, false],
+  'team-unseated': [false, false, true],
+  'team-short': [false, false, true],
+  'team-split-floors': [false, false, true],
+  'wish-unmet': [false, false, true],
+  'unwanted-day': [false, false, true],
+  'overflow-used': [false, false, true],
+  'team-scattered': [true, false, true],
+  'seat-differs': [false, false, true],
+  'team-over-seated': [false, false, true],
+  'no-team-days': [false, false, true],
+  'off-home-floor': [false, false, true],
+}
+
+/** The id an issue with this subject must have. */
+function idFor(subject: string): string {
+  const [rule, day, floorId, areaId, teams] = subject.split('|')
   if (rule === undefined || day === undefined || floorId === undefined || areaId === undefined || teams === undefined) {
-    throw new Error(`"${id}" is not an issue id`)
+    throw new Error(`"${subject}" is not the subject of an issue`)
+  }
+  const [floor, area, team] = IN_THE_ID[rule as IssueRule]
+  return [rule, day, floor ? floorId : '-', area ? areaId : '-', team ? teams : '-'].join('|')
+}
+
+/** A complete issue written the short way, by its subject (see `subjectOf`). */
+function anIssue(subject: string, severity: Severity, title: string, detail: string): Issue {
+  const [rule, day, floorId, areaId, teams] = subject.split('|')
+  if (rule === undefined || day === undefined || floorId === undefined || areaId === undefined || teams === undefined) {
+    throw new Error(`"${subject}" is not the subject of an issue`)
   }
   const orNull = (part: string) => (part === '-' ? null : part)
   return {
-    id,
+    id: idFor(subject),
     rule: rule as IssueRule,
     severity,
     day: orNull(day) as Weekday | null,
@@ -148,7 +184,7 @@ describe('area-over-capacity', () => {
     // Only on Tuesday: on Thursday Claims Intake has NE 1 to itself.
     expect(findIssues(p)).toEqual([
       {
-        id: 'area-over-capacity|tue|4|ne1|claims+under',
+        id: 'area-over-capacity|tue|-|ne1|-',
         rule: 'area-over-capacity',
         severity: 'error',
         day: 'tue',
@@ -178,7 +214,7 @@ describe('area-over-capacity', () => {
 
   it('reports every day on which it happens', () => {
     const p = project([floor4()], [claims(4, ['tue', 'thu'], { ne1: 4 }), underwriting(1, ['tue', 'wed', 'thu'])])
-    expect(ids(findIssues(p))).toEqual([
+    expect(subjects(findIssues(p))).toEqual([
       'area-over-capacity|tue|4|ne1|claims+under',
       'area-over-capacity|thu|4|ne1|claims+under',
     ])
@@ -216,7 +252,7 @@ describe('area-over-capacity', () => {
   it('does not apply to rooms: more people than chairs is still just "seated in a room"', () => {
     const p = project([floor4()], [claims(9, ['tue'], { room: 9 })])
     expect(ofRule(p, 'area-over-capacity')).toEqual([])
-    expect(ids(ofRule(p, 'seats-in-room'))).toEqual(['seats-in-room|tue|4|room|claims'])
+    expect(subjects(ofRule(p, 'seats-in-room'))).toEqual(['seats-in-room|tue|4|room|claims'])
   })
 })
 
@@ -249,7 +285,7 @@ describe('seats-in-room', () => {
       ],
     )
     const inRooms = ofRule(p, 'seats-in-room')
-    expect(ids(inRooms)).toEqual([
+    expect(subjects(inRooms)).toEqual([
       'seats-in-room|tue|4|room1|claims',
       'seats-in-room|tue|4|room1|under',
       'seats-in-room|tue|4|room2|claims',
@@ -322,7 +358,7 @@ describe('how full a day is: day-uses-reserve, day-needs-overflow, day-over-capa
   it('follows the reserve setting', () => {
     // No reserve: all 10 desks may be planned, the eleventh person needs an overflow seat.
     expect(dayRules(building(10, 0))).toEqual([])
-    expect(ids(dayRules(building(11, 0)))).toEqual(['day-needs-overflow|tue|-|-|big'])
+    expect(subjects(dayRules(building(11, 0)))).toEqual(['day-needs-overflow|tue|-|-|big'])
     // Half of the desks kept free.
     expect(dayRules(building(5, 0.5))).toEqual([])
     expect(dayRules(building(6, 0.5)).map((i) => i.detail)).toEqual([
@@ -427,7 +463,7 @@ describe('team-unseated, team-short and team-over-seated', () => {
 
   it('reports every unseated team day', () => {
     const p = project([floor4()], [claims(9, ['tue', 'thu'])])
-    expect(ids(findIssues(p))).toEqual(['team-unseated|tue|-|-|claims', 'team-unseated|thu|-|-|claims'])
+    expect(subjects(findIssues(p))).toEqual(['team-unseated|tue|-|-|claims', 'team-unseated|thu|-|-|claims'])
   })
 
   it('reports a team with fewer seats than it needs', () => {
@@ -464,10 +500,10 @@ describe('team-unseated, team-short and team-over-seated', () => {
 
   it('does not count seats in a room', () => {
     const partly = findIssues(withSeats({ ne1: 4, ne2: 4, room: 1 }))
-    expect(ids(partly)).toEqual(['seats-in-room|tue|4|room|claims', 'team-short|tue|4|-|claims'])
+    expect(subjects(partly)).toEqual(['seats-in-room|tue|4|room|claims', 'team-short|tue|4|-|claims'])
     expect(partly[1]?.detail).toBe('8 of 9 seats placed')
 
-    expect(ids(findIssues(withSeats({ room: 9 })))).toEqual([
+    expect(subjects(findIssues(withSeats({ room: 9 })))).toEqual([
       'seats-in-room|tue|4|room|claims',
       'team-unseated|tue|-|-|claims',
     ])
@@ -488,8 +524,8 @@ describe('team-unseated, team-short and team-over-seated', () => {
 
   it('shows a team that is short on the first floor where it holds seats', () => {
     const onTwoFloors = (seating: Seating) => project([floor3(), floor4()], [claims(9, ['tue'], seating)])
-    expect(ids(ofRule(onTwoFloors({ ne1: 4 }), 'team-short'))).toEqual(['team-short|tue|4|-|claims'])
-    expect(ids(ofRule(onTwoFloors({ ne1: 4, sw3: 1 }), 'team-short'))).toEqual(['team-short|tue|3|-|claims'])
+    expect(subjects(ofRule(onTwoFloors({ ne1: 4 }), 'team-short'))).toEqual(['team-short|tue|4|-|claims'])
+    expect(subjects(ofRule(onTwoFloors({ ne1: 4, sw3: 1 }), 'team-short'))).toEqual(['team-short|tue|3|-|claims'])
   })
 })
 
@@ -585,7 +621,7 @@ describe('team-split-floors', () => {
       area('room3', 6, { kind: 'no-seating', name: 'Meeting room 3.1' }),
     ])
     const p = project([floor3WithRoom, floor4()], [claims(4, ['tue'], { ne1: 4, room3: 1 })])
-    expect(ids(findIssues(p))).toEqual(['seats-in-room|tue|3|room3|claims'])
+    expect(subjects(findIssues(p))).toEqual(['seats-in-room|tue|3|room3|claims'])
   })
 })
 
@@ -652,7 +688,7 @@ describe('team-scattered', () => {
     ])
     // One area on each floor is split over floors, but scattered on neither.
     const oneEach = project([floor3(), floor4()], [claims(8, ['tue'], { sw1: 4, ne1: 4 })])
-    expect(ids(findIssues(oneEach))).toEqual(['team-split-floors|tue|3|-|claims'])
+    expect(subjects(findIssues(oneEach))).toEqual(['team-split-floors|tue|3|-|claims'])
   })
 
   it('goes by the gap between areas, in any direction', () => {
@@ -744,7 +780,7 @@ describe('off-home-floor', () => {
         'off-home-floor|tue|4|-|claims',
         'info',
         'Claims Intake is not on its preferred floor on Tuesday',
-        'Preferred: Floor 3. Seated on: Floor 4',
+        'Preferred: Floor 3. Seated on: Floor 4 (4 seats)',
       ),
     ])
   })
@@ -752,12 +788,12 @@ describe('off-home-floor', () => {
   it('is silent on the preferred floor, without a preference and without seats', () => {
     expect(findIssues(onTwoFloors({ sw1: 4 }, '3'))).toEqual([])
     expect(findIssues(onTwoFloors({ ne1: 4 }, null))).toEqual([])
-    expect(ids(findIssues(onTwoFloors({}, '3')))).toEqual(['team-unseated|tue|3|-|claims'])
+    expect(subjects(findIssues(onTwoFloors({}, '3')))).toEqual(['team-unseated|tue|3|-|claims'])
   })
 
   it('ignores a preferred floor that does not exist', () => {
     expect(findIssues(onTwoFloors({ ne1: 4 }, 'gone'))).toEqual([])
-    expect(ids(findIssues(onTwoFloors({}, 'gone')))).toEqual(['team-unseated|tue|-|-|claims'])
+    expect(subjects(findIssues(onTwoFloors({}, 'gone')))).toEqual(['team-unseated|tue|-|-|claims'])
   })
 
   it('names every floor of a team that is only partly on its preferred floor', () => {
@@ -766,7 +802,7 @@ describe('off-home-floor', () => {
         'off-home-floor|tue|3|-|claims',
         'info',
         'Claims Intake is not on its preferred floor on Tuesday',
-        'Preferred: Floor 4. Seated on: Floor 3 and Floor 4',
+        'Preferred: Floor 4. Seated on: Floor 3 (2 seats) and Floor 4 (2 seats)',
       ),
     ])
   })
@@ -789,7 +825,7 @@ describe('seat-differs and day exceptions', () => {
         'seat-differs|tue|4|-|claims',
         'info',
         'Claims Intake sits somewhere else on Tuesday',
-        'Tuesday: Floor 4: SE 1, SE 2. Other days: Floor 4: NE 1, NE 2',
+        'Tuesday: Floor 4: 4 in SE 1, 4 in SE 2. Other days: Floor 4: 4 in NE 1, 4 in NE 2',
       ),
     ])
   })
@@ -850,30 +886,45 @@ describe('seat-differs and day exceptions', () => {
         'seat-differs|tue|4|-|claims',
         'info',
         'Claims Intake sits somewhere else on Tuesday',
-        'Tuesday: Floor 4: NE 1. Other days: not seated',
+        'Tuesday: Floor 4: 4 in NE 1. Other days: not seated',
       ),
     ])
   })
 
-  it('says so when every team day has its own seating', () => {
+  it('says "a different number of seats" when the areas are the same and only the numbers differ', () => {
+    // Normally 4 in NE 1 and 4 in NE 2; on Thursday 6 and 2 in the same two areas.
     const p = project(
       [floor4()],
-      [claims(4, ['tue', 'thu'], { ne1: 4 }, { daySeating: { tue: { ne2: 4 }, thu: { ne3: 4 } } })],
+      [claims(8, ['tue', 'thu'], { ne1: 4, ne2: 4 }, { daySeating: { thu: { ne1: 6, ne2: 2 } } })],
     )
-    expect(findIssues(p)).toEqual([
-      anIssue(
-        'seat-differs|tue|4|-|claims',
-        'info',
-        'Claims Intake sits somewhere else on Tuesday',
-        'Tuesday: Floor 4: NE 2. Every team day has its own seating',
-      ),
+    expect(ofRule(p, 'seat-differs')).toEqual([
       anIssue(
         'seat-differs|thu|4|-|claims',
         'info',
-        'Claims Intake sits somewhere else on Thursday',
-        'Thursday: Floor 4: NE 3. Every team day has its own seating',
+        'Claims Intake has a different number of seats on Thursday',
+        'Thursday: Floor 4: 6 in NE 1, 2 in NE 2. Other days: Floor 4: 4 in NE 1, 4 in NE 2',
       ),
     ])
+  })
+
+  it('opens an accepted note again when only the numbers behind it change', () => {
+    const before = project(
+      [floor4()],
+      [claims(8, ['tue', 'thu'], { ne1: 4, ne2: 4 }, { daySeating: { thu: { ne1: 6, ne2: 2 } } })],
+    )
+    const [note] = ofRule(before, 'seat-differs')
+    if (!note) throw new Error('no note')
+    const accepted: Project = { ...before, accepted: { [note.id]: { note: 'agreed', detail: note.detail } } }
+    expect(isAccepted(accepted, note)).toBe(true)
+    // Thursday shifts further: 7 and 1. Same areas, same id, other numbers.
+    const after: Project = {
+      ...accepted,
+      teams: accepted.teams.map((t) => ({ ...t, daySeating: { thu: { ne1: 7, ne2: 1 } } })),
+    }
+    const [shifted] = ofRule(after, 'seat-differs')
+    if (!shifted) throw new Error('no note')
+    expect(shifted.id).toBe(note.id)
+    expect(isAccepted(after, shifted)).toBe(false)
   })
 
   it('describes seats on several floors and shows the first of them', () => {
@@ -886,7 +937,7 @@ describe('seat-differs and day exceptions', () => {
         'seat-differs|mon|3|-|claims',
         'info',
         'Claims Intake sits somewhere else on Monday',
-        'Monday: Floor 3: SW 1; Floor 4: NE 1. Other days: Floor 4: NE 1, NE 2',
+        'Monday: Floor 3: 4 in SW 1; Floor 4: 4 in NE 1. Other days: Floor 4: 4 in NE 1, 4 in NE 2',
       ),
     ])
   })
@@ -951,7 +1002,7 @@ describe('wish-unmet', () => {
   it('is about the week, not about a place: it names no floor, whatever the team prefers', () => {
     const said = wishes({ tue: 'want', thu: 'want' })
     const p = project([floor4()], [claims(4, ['thu'], { ne1: 4 }, { wishes: said, homeFloorId: '4' })])
-    expect(ids(findIssues(p))).toEqual(['wish-unmet|tue|-|-|claims'])
+    expect(subjects(findIssues(p))).toEqual(['wish-unmet|tue|-|-|claims'])
   })
 
   it('says so when no day is planned at all', () => {
@@ -997,12 +1048,12 @@ describe('no-team-days', () => {
 
   it('names no floor, whatever the team prefers', () => {
     const p = project([floor4()], [claims(9, [], {}, { homeFloorId: '4' })])
-    expect(ids(findIssues(p))).toEqual(['no-team-days|-|-|-|claims'])
+    expect(subjects(findIssues(p))).toEqual(['no-team-days|-|-|-|claims'])
   })
 
   it('counts the seats of a team without a team day nowhere', () => {
     const p = project([floor4()], [claims(9, [], { ne1: 9, room: 2 })])
-    expect(ids(findIssues(p))).toEqual(['no-team-days|-|-|-|claims'])
+    expect(subjects(findIssues(p))).toEqual(['no-team-days|-|-|-|claims'])
   })
 })
 
@@ -1042,7 +1093,7 @@ describe('the order of the issues', () => {
       ],
     )
     expect(violations(p)).toEqual([])
-    expect(ids(findIssues(p))).toEqual([
+    expect(subjects(findIssues(p))).toEqual([
       // Conflicts. Monday comes before Tuesday although it is on the higher floor.
       'area-over-capacity|mon|4|m|wu+di',
       // Floor 3 before floor 4, and Z before A because that is their order on the floor.
@@ -1149,8 +1200,7 @@ function expectWellFormed(p: Project, issues: readonly Issue[]): void {
   const teamIds = p.teams.map((t) => t.id)
 
   for (const issue of issues) {
-    const teams = issue.teamIds.join('+') || '-'
-    expect(issue.id).toBe([issue.rule, issue.day ?? '-', issue.floorId ?? '-', issue.areaId ?? '-', teams].join('|'))
+    expect(issue.id).toBe(idFor(subjectOf(issue)))
     expect(issue.severity).toBe(RULE_SEVERITY[issue.rule])
 
     if (issue.floorId !== null) expect(floorIds.has(issue.floorId)).toBe(true)
@@ -1169,9 +1219,9 @@ function expectWellFormed(p: Project, issues: readonly Issue[]): void {
     }
   }
 
-  expect(new Set(ids(issues)).size).toBe(issues.length)
+  expect(new Set(subjects(issues)).size).toBe(issues.length)
   const inOrder = [...issues].sort((a, b) => comparePositions(listPosition(p, a), listPosition(p, b)))
-  expect(ids(issues)).toEqual(ids(inOrder))
+  expect(subjects(issues)).toEqual(subjects(inOrder))
 }
 
 describe('a larger mixed project', () => {
@@ -1189,7 +1239,7 @@ describe('a larger mixed project', () => {
   })
 
   it('lists the issues of each level', () => {
-    const idsOf = (severity: Severity) => ids(issues.filter((issue) => issue.severity === severity))
+    const idsOf = (severity: Severity) => subjects(issues.filter((issue) => issue.severity === severity))
     expect(idsOf('error')).toEqual([
       'day-over-capacity|mon|-|-|legal+crowd1',
       'area-over-capacity|tue|4|ne1|claims+under',
@@ -1378,13 +1428,13 @@ describe('on 300 random plans', () => {
 
   it('finds exactly the collisions that the seating records hold', () => {
     onEveryPlan((p) => {
-      expect(ids(ofRule(p, 'area-over-capacity', 'seats-in-room')).sort()).toEqual(collisionIds(p).sort())
+      expect(subjects(ofRule(p, 'area-over-capacity', 'seats-in-room')).sort()).toEqual(collisionIds(p).sort())
     })
   })
 
   it('finds exactly the teams that are unseated, short or over-seated', () => {
     onEveryPlan((p) => {
-      expect(ids(ofRule(p, 'team-unseated', 'team-short', 'team-over-seated')).sort()).toEqual(seatStateIds(p).sort())
+      expect(subjects(ofRule(p, 'team-unseated', 'team-short', 'team-over-seated')).sort()).toEqual(seatStateIds(p).sort())
     })
   })
 
@@ -1419,7 +1469,7 @@ describe('isAccepted', () => {
   it('takes a warning as accepted while its detail is unchanged', () => {
     const p = atTheBench(2)
     const warning = theOnlyIssue(p)
-    expect(warning.id).toBe('overflow-used|tue|4|bench|claims')
+    expect(warning.id).toBe('overflow-used|tue|-|-|claims')
     expect(isAccepted(p, warning)).toBe(false)
 
     const accepted = accepting(p, [warning], 'Agreed with the team')
@@ -1480,7 +1530,7 @@ describe('summarizeIssues', () => {
       ],
     )
     const issues = findIssues(p)
-    expect(ids(issues)).toEqual([
+    expect(subjects(issues)).toEqual([
       'area-over-capacity|tue|4|ne1|claims+under',
       'seats-in-room|tue|4|room|data',
       'seats-in-room|thu|4|room|data',
@@ -1529,7 +1579,7 @@ describe('worstSeverity', () => {
   const issues = findIssues(p)
 
   it('starts from one issue of each level', () => {
-    expect(ids(issues)).toEqual([
+    expect(subjects(issues)).toEqual([
       'area-over-capacity|mon|4|ne1|claims+under',
       'team-short|tue|3|-|policy',
       'overflow-used|wed|4|bench|portal',
@@ -1709,7 +1759,7 @@ describe('on the real floor 4', () => {
         'seat-differs|thu|floor-4|-|claims',
         'info',
         'Claims Intake sits somewhere else on Thursday',
-        'Thursday: Floor 4: SW 1, SW 2, SW 3, SW 4. Other days: Floor 4: NE 1, NE 2, NE 3',
+        'Thursday: Floor 4: 4 in SW 1, 2 in SW 2, 2 in SW 3, 1 in SW 4. Other days: Floor 4: 4 in NE 1, 2 in NE 2, 3 in NE 3',
       ),
       anIssue(
         'team-scattered|thu|floor-4|-|portal',
@@ -1745,5 +1795,59 @@ describe('on the real floor 4', () => {
     )
     expect(violations(fixed)).toEqual([])
     expect(findIssues(fixed)).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Ids stay the same while the problem persists (found in review)
+// ---------------------------------------------------------------------------
+
+describe('issue ids', () => {
+  const realIds = (p: Project) => findIssues(p).map((issue) => issue.id)
+
+  it('do not change when floors are reordered', () => {
+    const floor3 = floor('3', [area('s1', 4, { rect: { x: 0.1, y: 0.1, w: 0.1, h: 0.2 } })], { name: 'Floor 3' })
+    const floor4b = floor('4', [area('n1', 4, { rect: { x: 0.1, y: 0.1, w: 0.1, h: 0.2 } })], { name: 'Floor 4' })
+    const floor5 = floor('5', [area('t1', 4, { rect: { x: 0.1, y: 0.1, w: 0.1, h: 0.2 } })], { name: 'Floor 5' })
+    const alpha = team('alpha', 8, ['tue', 'fri'], { s1: 4, n1: 4 }, {
+      homeFloorId: '5',
+      wishes: wishes({ tue: 'want', fri: 'cannot' }),
+    })
+    const before = project([floor3, floor4b, floor5], [alpha])
+    const after = project([floor4b, floor3, floor5], [alpha])
+    expect(violations(before)).toEqual([])
+    expect(realIds(before).length).toBeGreaterThan(3)
+    expect([...realIds(after)].sort()).toEqual([...realIds(before)].sort())
+  })
+
+  it('do not change for "planned although it cannot come" when the team gets seats', () => {
+    const unseated = project([floor4()], [claims(4, ['fri'], {}, { wishes: wishes({ fri: 'cannot' }) })])
+    const seated = project([floor4()], [claims(4, ['fri'], { ne1: 4 }, { wishes: wishes({ fri: 'cannot' }) })])
+    const idOf = (p: Project) => ofRule(p, 'unwanted-day').map((issue) => issue.id)
+    expect(idOf(unseated)).toEqual(['unwanted-day|fri|-|-|claims'])
+    expect(idOf(seated)).toEqual(idOf(unseated))
+  })
+
+  it('do not change for an over-full area when another team joins or leaves it', () => {
+    const under = (seats: number) => team('under', seats, ['tue'], { ne1: seats }, { name: 'Underwriting' })
+    const policy = team('policy', 2, ['tue'], { ne1: 2 }, { name: 'Policy Admin' })
+    const two = project([floor4()], [claims(4, ['tue'], { ne1: 4 }), under(2)])
+    const three = project([floor4()], [claims(4, ['tue'], { ne1: 4 }), under(2), policy])
+    const idOf = (p: Project) => ofRule(p, 'area-over-capacity').map((issue) => issue.id)
+    expect(idOf(two)).toEqual(['area-over-capacity|tue|-|ne1|-'])
+    expect(idOf(three)).toEqual(idOf(two))
+  })
+
+  it('are unique within a result', () => {
+    const p = project(
+      [floor4()],
+      [
+        claims(4, ['tue', 'thu'], { ne1: 4 }),
+        team('under', 4, ['tue', 'thu'], { ne1: 2 }, { name: 'Underwriting' }),
+        team('policy', 3, ['tue'], {}, { name: 'Policy Admin' }),
+      ],
+    )
+    const all = realIds(p)
+    expect(new Set(all).size).toBe(all.length)
   })
 })

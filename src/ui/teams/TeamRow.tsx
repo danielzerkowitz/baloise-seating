@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { describeSeating, hasDayException } from '../../domain/model'
+import { artsOf, describeSeating, hasDayException } from '../../domain/model'
 import type { TeamPatch } from '../../domain/reducer'
 import { WEEKDAYS, type Id, type Project, type Team } from '../../domain/types'
 import { dispatch } from '../../state/store'
@@ -8,18 +8,48 @@ import { daysShort } from '../format'
 import { IconDots, IconFile } from '../icons'
 import { ColourCell } from './ColourCell'
 import { DayCell } from './DayCell'
-import { MAX_GROUP_LENGTH, MAX_NAME_LENGTH, MAX_TEAM_SIZE } from './limits'
+import { MAX_NAME_LENGTH, MAX_TEAM_SIZE } from './limits'
 import { NumberInput } from './NumberInput'
 import { PopoverMenu, type PopoverMenuItem } from './Popover'
 import { SeatsCell } from './SeatsCell'
 import { duplicateTeam, removeTeam, seatOnPlan, teamLabel } from './teamActions'
 
+/** The value of the option that opens the dialog for editing domains and ARTs; never an id. */
+const EDIT_ORG = '#edit'
+const NONE = '–'
+
+/** The ARTs a team can be put on. A team in a domain picks one of that domain's ARTs (to
+ *  change domain, it changes the domain first). A team in no domain can pick any ART, and
+ *  so joins the ART's domain: the ARTs are listed under their domains. */
+function artChoices(project: Project, domainId: Id | null) {
+  const option = (art: { id: Id; name: string }) => (
+    <option key={art.id} value={art.id}>
+      {art.name.trim() || 'Unnamed ART'}
+    </option>
+  )
+  if (domainId !== null) return artsOf(project, domainId).map(option)
+  const loose = artsOf(project, null)
+  return (
+    <>
+      {loose.map(option)}
+      {project.domains.map((domain) => {
+        const arts = artsOf(project, domain.id)
+        return arts.length > 0 ? (
+          <optgroup key={domain.id} label={domain.name.trim() || 'Unnamed domain'}>
+            {arts.map(option)}
+          </optgroup>
+        ) : null
+      })}
+    </>
+  )
+}
+
 /** One team: who it is, how many seats it needs, its week, and where it sits. */
 export function TeamRow(props: {
   project: Project
   team: Team
-  /** Id of the <datalist> with the groups already in use. */
-  groupsListId: string
+  /** Opens the dialog for editing the domains and ARTs. */
+  onEditOrg: () => void
   /** Put the focus in the name field (the team was just added). */
   focusName: boolean
   /** Show the column for the preferred floor. */
@@ -117,16 +147,38 @@ export function TeamRow(props: {
         />
       </td>
       <td className="teams-td">
-        <input
-          className="input teams-quiet"
-          aria-label={`Group of ${name}`}
-          list={props.groupsListId}
-          maxLength={MAX_GROUP_LENGTH}
-          autoComplete="off"
-          spellCheck={false}
-          value={team.group}
-          onChange={(event) => update({ group: event.target.value }, 'group')}
-        />
+        <select
+          className="select teams-quiet"
+          aria-label={`Domain of ${name}`}
+          value={team.domainId ?? ''}
+          onChange={(event) => {
+            if (event.target.value === EDIT_ORG) props.onEditOrg()
+            else update({ domainId: event.target.value || null }, 'domain')
+          }}
+        >
+          <option value="">{NONE}</option>
+          {project.domains.map((domain) => (
+            <option key={domain.id} value={domain.id}>
+              {domain.name.trim() || 'Unnamed domain'}
+            </option>
+          ))}
+          <option value={EDIT_ORG}>Edit domains and ARTs…</option>
+        </select>
+      </td>
+      <td className="teams-td">
+        <select
+          className="select teams-quiet"
+          aria-label={`ART of ${name}`}
+          value={team.artId ?? ''}
+          onChange={(event) => {
+            if (event.target.value === EDIT_ORG) props.onEditOrg()
+            else update({ artId: event.target.value || null }, 'art')
+          }}
+        >
+          <option value="">{NONE}</option>
+          {artChoices(project, team.domainId)}
+          <option value={EDIT_ORG}>Edit domains and ARTs…</option>
+        </select>
       </td>
       <td className="teams-td">
         <NumberInput

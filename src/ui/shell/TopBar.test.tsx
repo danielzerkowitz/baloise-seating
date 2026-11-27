@@ -58,7 +58,7 @@ function recordDownloads(): void {
 }
 
 function addExampleTeams(): void {
-  act(() => dispatch({ type: 'team/addMany', teams: exampleTeams(getProject()) }))
+  act(() => dispatch(exampleTeams(getProject()).action))
 }
 
 function chooseFromFileMenu(item: string): void {

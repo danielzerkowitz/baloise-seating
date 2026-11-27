@@ -3,6 +3,7 @@ import { autoSeat, type AutoSeatOptions, type AutoSeatResult } from './autoseat'
 import { FLOOR4_AREAS, FLOOR4_PLAN_SIZE } from './floor4'
 import { clusterAreas } from './geometry'
 import { dayOccupancy, seatingOn, seatsNeeded, sumSeats, teamDayStatus } from './model'
+import { settleSeating } from './reducer'
 import { area, floor, project, row, team, violations } from './testkit'
 import {
   WEEKDAYS,
@@ -226,29 +227,30 @@ describe('autoSeat: several teams', () => {
     expect(teamOf(result.project, 'oneday').seating).toEqual({ b: 4 })
   })
 
-  it('seats a team next to a team of its group that is in on the same day', () => {
-    const areas = row(['a', 'b', 'c', 'd', 'e'], 4)
-    const claims = team('intake', 4, ['mon'], { e: 4 }, { group: 'Claims' })
-    const together = project([floor('4', areas)], [claims, team('handling', 4, ['mon'], {}, { group: 'Claims' })])
-    expect(teamOf(seat(together).project, 'handling').seating).toEqual({ d: 4 })
+  it('seats a team next to a team of its ART, or else of its domain, that is in on the same day', () => {
+    const areas = row(['a', 'b', 'c', 'd', 'e', 'f', 'g'], 4)
+    const onArt = { domainId: 'nonlife', artId: 'claims' }
+    const intake = team('intake', 4, ['mon'], { g: 4 }, onArt)
+    const sameArt = project([floor('4', areas)], [intake, team('handling', 4, ['mon'], {}, onArt)])
+    expect(teamOf(seat(sameArt).project, 'handling').seating).toEqual({ f: 4 })
 
-    const spaces = project([floor('4', areas)], [claims, team('handling', 4, ['mon'], {}, { group: ' Claims ' })])
-    expect(teamOf(seat(spaces).project, 'handling').seating).toEqual({ d: 4 })
+    // A team in the domain on no ART, such as a management team, sits with its domain.
+    const sameDomain = project([floor('4', areas)], [intake, team('board', 4, ['mon'], {}, { domainId: 'nonlife' })])
+    expect(teamOf(seat(sameDomain).project, 'board').seating).toEqual({ f: 4 })
 
-    const otherGroup = project([floor('4', areas)], [claims, team('handling', 4, ['mon'], {}, { group: 'Policy' })])
-    expect(teamOf(seat(otherGroup).project, 'handling').seating).toEqual({ a: 4 })
+    // A team of the same ART comes before one that only shares the domain.
+    const policy = team('policy', 4, ['mon'], { b: 4 }, { domainId: 'nonlife', artId: 'policy' })
+    const both = project([floor('4', areas)], [policy, intake, team('handling', 4, ['mon'], {}, onArt)])
+    expect(teamOf(seat(both).project, 'handling').seating).toEqual({ f: 4 })
 
-    const noGroup = project(
-      [floor('4', areas)],
-      [{ ...claims, group: '' }, team('handling', 4, ['mon'], {}, { group: '' })],
-    )
-    expect(teamOf(seat(noGroup).project, 'handling').seating).toEqual({ a: 4 })
+    const otherDomain = project([floor('4', areas)], [intake, team('portal', 4, ['mon'], {}, { domainId: 'digital' })])
+    expect(teamOf(seat(otherDomain).project, 'portal').seating).toEqual({ a: 4 })
 
-    // A team of the group that is in on another day is nobody to sit next to.
-    const otherDay = project(
-      [floor('4', areas)],
-      [{ ...claims, days: ['tue'] }, team('handling', 4, ['mon'], {}, { group: 'Claims' })],
-    )
+    const nowhere = project([floor('4', areas)], [{ ...intake, domainId: null, artId: null }, team('handling', 4, ['mon'])])
+    expect(teamOf(seat(nowhere).project, 'handling').seating).toEqual({ a: 4 })
+
+    // A team of the ART that is in on another day is nobody to sit next to.
+    const otherDay = project([floor('4', areas)], [{ ...intake, days: ['tue'] }, team('handling', 4, ['mon'], {}, onArt)])
     expect(teamOf(seat(otherDay).project, 'handling').seating).toEqual({ a: 4 })
   })
 })
@@ -579,7 +581,7 @@ describe('autoSeat: not enough room', () => {
     expect(seat(p).project).toBe(p)
 
     // Seated day by day and short on Tuesday, with Tuesday full.
-    const dayByDay = team('beta', 4, ['mon', 'tue'], {}, { daySeating: { mon: { a: 4 }, tue: { b: 2 } } })
+    const dayByDay = team('beta', 4, ['mon', 'tue'], { a: 4 }, { daySeating: { tue: { b: 2 } } })
     const blocker = team('blocker', 2, ['tue'], { b: 2 })
     const q = project([floor('4', [...row(['a', 'b'], 4)])], [dayByDay, blocker, team('other', 4, ['tue'], { a: 4 })])
     const result = seat(q)
@@ -868,7 +870,7 @@ describe('autoSeat: a whole office', () => {
       ['platform', 30, ['mon', 'tue', 'wed', 'thu', 'fri'], ''],
       ['sales', 15, ['tue', 'wed', 'thu'], ''],
     ]
-    return list.map(([id, size, days, group]) => team(id, size, days, {}, { group }))
+    return list.map(([id, size, days, domain]) => team(id, size, days, {}, { domainId: domain || null }))
   }
 
   const variants: AutoSeatOptions[] = [
@@ -987,12 +989,15 @@ describe('autoSeat: random offices', () => {
       }
       const homeFloor = chance(0.3) ? floors[upTo(floors.length - 1)] : undefined
       teams.push(
-        team(`t${t}`, upTo(14), days, seating, {
-          daySeating,
-          group: chance(0.5) ? `group ${upTo(1)}` : '',
-          homeFloorId: homeFloor?.id ?? null,
-          attendance: chance(0.2) ? 0.6 : null,
-        }),
+        // As the reducer would leave it: never a seating of its own on every team day.
+        settleSeating(
+          team(`t${t}`, upTo(14), days, seating, {
+            daySeating,
+            domainId: chance(0.5) ? `domain-${upTo(1)}` : null,
+            homeFloorId: homeFloor?.id ?? null,
+            attendance: chance(0.2) ? 0.6 : null,
+          }),
+        ),
       )
     }
 
@@ -1047,5 +1052,65 @@ describe('autoSeat: random offices', () => {
       const changed = result.project.teams.some((t, i) => t !== p.teams[i])
       expect(result.project === p, where).toBe(!changed)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Found in review
+// ---------------------------------------------------------------------------
+
+describe('autoSeat: found in review', () => {
+  const teamIn = (result: AutoSeatResult, id: string) => {
+    const found = result.project.teams.find((t) => t.id === id)
+    if (!found) throw new Error(`no team ${id}`)
+    return found
+  }
+
+  it('gives the days that have room the same seats when one day is full', () => {
+    // Tuesday is full. Monday and Wednesday both have B free (A is taken on Monday).
+    const p = project(
+      [floor('1', row(['a', 'b', 'c'], 4))],
+      [
+        team('x', 4, ['mon'], { a: 4 }),
+        team('y1', 4, ['tue'], { a: 4 }),
+        team('y2', 4, ['tue'], { b: 4 }),
+        team('y3', 4, ['tue'], { c: 4 }),
+        team('alpha', 4, ['mon', 'tue', 'wed']),
+      ],
+    )
+    const result = autoSeat(p)
+    const alpha = teamIn(result, 'alpha')
+    // One seating for Monday and Wednesday; Tuesday is the exception, without seats.
+    expect(seatingOn(alpha, 'mon')).toEqual(seatingOn(alpha, 'wed'))
+    expect(sumSeats(seatingOn(alpha, 'mon'))).toBe(4)
+    expect(alpha.daySeating).toEqual({ tue: {} })
+    expect(violations(result.project)).toEqual([])
+  })
+
+  it('fills the floors a team already sits on before it opens a third', () => {
+    const p = project(
+      [
+        floor('3', row(['a', 'b'], 4).map((each, i) => (i === 1 ? { ...each, capacity: 3 } : each)), { name: 'Floor 3' }),
+        floor('4', row(['c', 'd'], 4).map((each, i) => (i === 1 ? { ...each, capacity: 2 } : each)), { name: 'Floor 4' }),
+        floor('5', [area('e', 10, { rect: { x: 0.05, y: 0.1, w: 0.3, h: 0.3 } })], { name: 'Floor 5' }),
+      ],
+      [team('alpha', 13, ['mon'], { a: 4, c: 4 })],
+    )
+    const result = autoSeat(p)
+    // Five are missing; B has three free and D two. Floor 5 is not needed.
+    expect(teamIn(result, 'alpha').seating).toEqual({ a: 4, b: 3, c: 4, d: 2 })
+    expect(violations(result.project)).toEqual([])
+  })
+
+  it('quotes the desks that are free in the proposal as a whole, not when the team was looked at', () => {
+    // Twelve desks. The team of fourteen is looked at first, with all twelve free; the two
+    // teams of five then take ten of them.
+    const p = project(
+      [floor('1', row(['a', 'b', 'c'], 4))],
+      [team('big', 14, ['tue']), team('one', 5, ['tue']), team('two', 5, ['tue'])],
+    )
+    const result = autoSeat(p)
+    const message = result.outcomes.find((o) => o.teamId === 'big')?.message ?? ''
+    expect(message).toBe('No room on Tuesday: needs 14 seats, 2 desks are free')
   })
 })

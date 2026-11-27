@@ -5,7 +5,11 @@
  *  - ids are unique; area ids are unique across ALL floors
  *  - a seating never refers to an area that does not exist and never holds a count below 1
  *  - `team.days` has no duplicates and is in week order
- *  - `team.daySeating` only has entries for days that are in `team.days`
+ *  - `team.daySeating` only has entries for days that are in `team.days`, never one equal
+ *    to `team.seating`, and never one for EVERY team day: at least one team day shows the
+ *    normal seating, so it cannot go stale out of sight
+ *  - a team's `domainId` and `artId`, and an ART's `domainId`, are null or refer to one that
+ *    exists; a team on an ART has that ART's domain
  *  - counts (team size, seats, capacity) are whole numbers of zero or more
  *  - rectangles lie inside the plan (all values 0..1, w and h above zero)
  */
@@ -111,8 +115,10 @@ export interface Team {
   size: number
   /** '#rrggbb' */
   color: string
-  /** Department, tribe or release train the team belongs to; '' for none. */
-  group: string
+  /** The domain the team belongs to, or null. For a team on an ART it is the ART's domain. */
+  domainId: Id | null
+  /** The agile release train (ART) the team is on, or null. */
+  artId: Id | null
   /** What the team asked for. */
   wishes: Record<Weekday, DayWish>
   /** The planned team days. Follows the wishes until the planner decides otherwise. */
@@ -128,6 +134,20 @@ export interface Team {
    *  `seating`. */
   daySeating: Partial<Record<Weekday, Seating>>
   notes: string
+}
+
+/** The top of the organisation the teams belong to, made of ARTs and of teams that are on
+ *  no ART (a management team). */
+export interface Domain {
+  id: Id
+  name: string
+}
+
+/** An agile release train: a team of teams within a domain, or within none. */
+export interface Art {
+  id: Id
+  name: string
+  domainId: Id | null
 }
 
 export interface Settings {
@@ -149,17 +169,22 @@ export interface AcceptedIssue {
 }
 
 export interface Project {
-  schemaVersion: 1
+  schemaVersion: 2
   name: string
   /** In building order, lowest floor first. */
   floors: Floor[]
+  /** In the planner's order. */
+  domains: Domain[]
+  arts: Art[]
   teams: Team[]
   settings: Settings
   /** Accepted warnings and notes, by issue id. Conflicts cannot be accepted. */
   accepted: Record<string, AcceptedIssue>
 }
 
-export const SCHEMA_VERSION = 1 as const
+/** 2: domains and ARTs in place of a team's free-text group. Version 1 plans are read, each
+ *  group becoming a domain of that name. */
+export const SCHEMA_VERSION = 2 as const
 
 export const DEFAULT_SETTINGS: Settings = { attendance: 1, reserve: 0 }
 

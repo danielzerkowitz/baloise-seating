@@ -1,8 +1,11 @@
 import { nextTeamColor, normalizeHex } from './color'
-import { clampRect, indexAreas, isSeatable, sameSeating, sortDays } from './model'
+import { boundedText, LIMITS } from './limits'
+import { clampRect, fitOrg, indexAreas, isSeatable, sameSeating, sortDays, sumSeats } from './model'
 import type {
   Area,
+  Art,
   DayWish,
+  Domain,
   Floor,
   Id,
   PlanImage,
@@ -19,8 +22,9 @@ import type {
    object, so it does not create an undo step. */
 
 export type TeamPatch = Partial<
-  Pick<Team, 'name' | 'code' | 'size' | 'color' | 'group' | 'attendance' | 'homeFloorId' | 'notes'>
+  Pick<Team, 'name' | 'code' | 'size' | 'color' | 'domainId' | 'artId' | 'attendance' | 'homeFloorId' | 'notes'>
 >
+export type ArtPatch = Partial<Pick<Art, 'name' | 'domainId'>>
 export type FloorPatch = Partial<Pick<Floor, 'name' | 'label' | 'plan'>>
 export type AreaPatch = Partial<Pick<Area, 'name' | 'kind' | 'capacity' | 'rect'>>
 
@@ -42,7 +46,8 @@ export type Action =
   | { type: 'team/setWish'; id: Id; day: Weekday; wish: DayWish }
   /** The planner's decision, independent of the wish. */
   | { type: 'team/setPlanned'; id: Id; day: Weekday; planned: boolean }
-  /** Plan `to` instead of `from`. The wishes stay as they are. */
+  /** Plan `to` instead of `from`. The team keeps the seats it had on `from`; the wishes stay
+   *  as they are. */
   | { type: 'team/moveDay'; id: Id; from: Weekday; to: Weekday }
   /** Give the team `seats` seats in an area (0 removes it from the area). With scope `all`
    *  this edits the seating used on every team day; with a weekday it edits that day only
@@ -67,6 +72,19 @@ export type Action =
   | { type: 'area/update'; id: Id; patch: AreaPatch }
   /** Removes the area and every seat teams held there. */
   | { type: 'area/remove'; id: Id }
+  /** Add a domain at the end of the list; refused when its id is in use. */
+  | { type: 'domain/add'; domain: Domain }
+  | { type: 'domain/rename'; id: Id; name: string }
+  /** Removes the domain. Its ARTs stay, on no domain; its teams stay, in no domain (those on
+   *  one of its ARTs stay on that ART). */
+  | { type: 'domain/remove'; id: Id }
+  /** Add an ART at the end of the list; refused when its id is in use. A domain that does not
+   *  exist becomes none. */
+  | { type: 'art/add'; art: Art }
+  /** Rename an ART or move it to another domain (or none); its teams move along. */
+  | { type: 'art/update'; id: Id; patch: ArtPatch }
+  /** Removes the ART. Its teams stay in the ART's domain, on no ART. */
+  | { type: 'art/remove'; id: Id }
   /** Accept a warning or note as it is, with an optional reason. `detail` is the issue's
    *  current detail text; the acceptance lapses when that text changes. */
   | { type: 'issue/accept'; id: string; note: string; detail: string }
@@ -130,17 +148,50 @@ function cleanSeating(seating: Seating, keep: (areaId: Id) => boolean): Seating 
   return changed ? next : seating
 }
 
-/** Drops day exceptions that are not exceptions: days that are not team days and seatings
- *  identical to the normal one. Returns the same team when nothing changed. */
-function tidyExceptions(team: Team): Team {
+/** Keeps a team's seating honest. Returns the same team when nothing had to change.
+ *
+ *  - Drops day exceptions that are not exceptions: on days that are not team days, and
+ *    seatings identical to the normal one.
+ *  - Never leaves the normal seating hidden. When EVERY team day has a seating of its own,
+ *    no day shows `team.seating`: nobody can see or edit it, and it would come back from
+ *    nowhere on the next day that is added. The seating most team days share then becomes
+ *    the normal one (on a tie the one with more seats, then the earlier day's). */
+export function settleSeating(team: Team): Team {
+  let seating = team.seating
   let daySeating = team.daySeating
   for (const key of Object.keys(team.daySeating) as Weekday[]) {
-    const seating = team.daySeating[key]
-    if (seating === undefined || !team.days.includes(key) || sameSeating(seating, team.seating)) {
+    const own = team.daySeating[key]
+    if (own === undefined || !team.days.includes(key) || sameSeating(own, seating)) {
       daySeating = withoutDay(daySeating, key)
     }
   }
-  return daySeating === team.daySeating ? team : { ...team, daySeating }
+  if (team.days.length > 0 && team.days.every((day) => daySeating[day] !== undefined)) {
+    let best: Seating | undefined
+    let bestDays = 0
+    let bestSeats = -1
+    for (const day of team.days) {
+      const candidate = daySeating[day]
+      if (candidate === undefined) continue
+      const sharedBy = team.days.filter((d) => {
+        const other = daySeating[d]
+        return other !== undefined && sameSeating(other, candidate)
+      }).length
+      const seats = sumSeats(candidate)
+      if (sharedBy > bestDays || (sharedBy === bestDays && seats > bestSeats)) {
+        best = candidate
+        bestDays = sharedBy
+        bestSeats = seats
+      }
+    }
+    if (best !== undefined) {
+      seating = best
+      for (const day of team.days) {
+        const own = daySeating[day]
+        if (own !== undefined && sameSeating(own, seating)) daySeating = withoutDay(daySeating, day)
+      }
+    }
+  }
+  return seating === team.seating && daySeating === team.daySeating ? team : { ...team, seating, daySeating }
 }
 
 /** Removes seats in areas that no longer exist, from every team. */
@@ -159,7 +210,7 @@ function pruneSeatings(project: Project): Project {
     }
     if (seating === team.seating && daySeating === team.daySeating) return team
     changed = true
-    return tidyExceptions({ ...team, seating, daySeating })
+    return settleSeating({ ...team, seating, daySeating })
   })
   return changed ? { ...project, teams } : project
 }
@@ -226,7 +277,7 @@ function fitTeam(project: Project, team: Team, colorsInUse: readonly string[]): 
     const seating = team.daySeating[day]
     if (seating !== undefined) daySeating[day] = cleanSeating(seating, exists)
   }
-  const fitted = tidyExceptions({
+  const fitted = settleSeating({
     ...team,
     code: team.code.slice(0, 4),
     size: toCount(team.size),
@@ -234,6 +285,7 @@ function fitTeam(project: Project, team: Team, colorsInUse: readonly string[]): 
     days,
     attendance: team.attendance === null ? null : clampAttendance(team.attendance),
     homeFloorId: project.floors.some((f) => f.id === team.homeFloorId) ? team.homeFloorId : null,
+    ...fitOrg(project, team.domainId, team.artId),
     seating: cleanSeating(team.seating, exists),
     daySeating,
   })
@@ -244,6 +296,8 @@ function fitTeam(project: Project, team: Team, colorsInUse: readonly string[]): 
     sameDays(fitted.days, team.days) &&
     fitted.attendance === team.attendance &&
     fitted.homeFloorId === team.homeFloorId &&
+    fitted.domainId === team.domainId &&
+    fitted.artId === team.artId &&
     fitted.seating === team.seating &&
     sameDaySeating(fitted.daySeating, team.daySeating)
   return fits ? team : fitted
@@ -267,12 +321,20 @@ function fitFloor(floor: Floor): Floor {
 
 function applyTeamPatch(project: Project, team: Team, patch: TeamPatch): Team {
   const next: Team = { ...team }
-  if (patch.name !== undefined) next.name = String(patch.name)
-  if (patch.code !== undefined) next.code = String(patch.code).slice(0, 4)
-  if (patch.size !== undefined) next.size = toCount(patch.size)
+  if (patch.name !== undefined) next.name = boundedText(String(patch.name), LIMITS.name)
+  if (patch.code !== undefined) next.code = boundedText(String(patch.code), LIMITS.code)
+  if (patch.size !== undefined) next.size = Math.min(LIMITS.teamSize, toCount(patch.size))
   if (patch.color !== undefined) next.color = normalizeHex(String(patch.color)) ?? team.color
-  if (patch.group !== undefined) next.group = String(patch.group)
-  if (patch.notes !== undefined) next.notes = String(patch.notes)
+  if (patch.domainId !== undefined || patch.artId !== undefined) {
+    const domainId = patch.domainId !== undefined ? patch.domainId : team.domainId
+    // A new domain takes the team off an ART of another domain, unless an ART is given too.
+    const keepsArt = patch.domainId === undefined || findArtDomain(project, team.artId) === patch.domainId
+    const artId = patch.artId !== undefined ? patch.artId : keepsArt ? team.artId : null
+    const org = fitOrg(project, domainId, artId)
+    next.domainId = org.domainId
+    next.artId = org.artId
+  }
+  if (patch.notes !== undefined) next.notes = boundedText(String(patch.notes), LIMITS.notes)
   if (patch.attendance !== undefined) {
     next.attendance = patch.attendance === null ? null : clampAttendance(patch.attendance)
   }
@@ -285,11 +347,32 @@ function applyTeamPatch(project: Project, team: Team, patch: TeamPatch): Team {
     next.code === team.code &&
     next.size === team.size &&
     next.color === team.color &&
-    next.group === team.group &&
+    next.domainId === team.domainId &&
+    next.artId === team.artId &&
     next.notes === team.notes &&
     next.attendance === team.attendance &&
     next.homeFloorId === team.homeFloorId
   return same ? team : next
+}
+
+/** The domain of an ART; undefined when there is no such ART. */
+function findArtDomain(project: Project, artId: Id | null): Id | null | undefined {
+  return artId === null ? undefined : project.arts.find((art) => art.id === artId)?.domainId
+}
+
+function orgName(name: unknown): string {
+  return boundedText(String(name), LIMITS.orgName)
+}
+
+/** Every team on the ART gets the ART's domain (after the ART moved). */
+function withArtDomain(teams: Team[], artId: Id, domainId: Id | null): Team[] {
+  let changed = false
+  const next = teams.map((team) => {
+    if (team.artId !== artId || team.domainId === domainId) return team
+    changed = true
+    return { ...team, domainId }
+  })
+  return changed ? next : teams
 }
 
 // ---------------------------------------------------------------------------
@@ -298,8 +381,10 @@ function applyTeamPatch(project: Project, team: Team, patch: TeamPatch): Team {
 
 export function reduce(project: Project, action: Action): Project {
   switch (action.type) {
-    case 'project/rename':
-      return action.name === project.name ? project : { ...project, name: action.name }
+    case 'project/rename': {
+      const name = boundedText(String(action.name), LIMITS.name)
+      return name === project.name ? project : { ...project, name }
+    }
 
     case 'project/replace':
       return action.project
@@ -356,7 +441,8 @@ export function reduce(project: Project, action: Action): Project {
             daySeating = withoutDay(daySeating, action.day)
           }
         }
-        return { ...team, wishes, days, daySeating }
+        // Taking a day off the plan can leave only days with a seating of their own.
+        return settleSeating({ ...team, wishes, days, daySeating })
       })
 
     case 'team/setPlanned':
@@ -364,18 +450,23 @@ export function reduce(project: Project, action: Action): Project {
         const has = team.days.includes(action.day)
         if (has === action.planned) return team
         if (action.planned) return { ...team, days: sortDays([...team.days, action.day]) }
-        return {
+        return settleSeating({
           ...team,
           days: team.days.filter((d) => d !== action.day),
           daySeating: withoutDay(team.daySeating, action.day),
-        }
+        })
       })
 
     case 'team/moveDay':
       return updateTeam(project, action.id, (team) => {
         if (action.from === action.to || !team.days.includes(action.from)) return team
         const days = sortDays([...team.days.filter((d) => d !== action.from), action.to])
-        return { ...team, days, daySeating: withoutDay(team.daySeating, action.from) }
+        // The team keeps the seats it had on the day it leaves: a seating of its own for
+        // that day moves along. (A day that was a team day already keeps its own seating.)
+        const own = team.daySeating[action.from]
+        let daySeating = withoutDay(team.daySeating, action.from)
+        if (own !== undefined && !team.days.includes(action.to)) daySeating = { ...daySeating, [action.to]: own }
+        return settleSeating({ ...team, days, daySeating })
       })
 
     case 'seat/set': {
@@ -392,7 +483,7 @@ export function reduce(project: Project, action: Action): Project {
         if (!seatable && seats > (current[action.areaId] ?? 0)) return team
         const next = withSeats(current, action.areaId, seats)
         if (next === current) return team
-        return tidyExceptions(
+        return settleSeating(
           scope === 'all' ? { ...team, seating: next } : { ...team, daySeating: { ...team.daySeating, [scope]: next } },
         )
       })
@@ -408,7 +499,7 @@ export function reduce(project: Project, action: Action): Project {
         if (!team.days.includes(day)) return team
         const current = team.daySeating[day] ?? team.seating
         if (Object.keys(current).length === 0) return team
-        return tidyExceptions({ ...team, daySeating: { ...team.daySeating, [day]: {} } })
+        return settleSeating({ ...team, daySeating: { ...team.daySeating, [day]: {} } })
       })
 
     case 'seat/resetDay':
@@ -430,7 +521,7 @@ export function reduce(project: Project, action: Action): Project {
           const s = action.daySeating?.[day]
           if (s !== undefined) daySeating[day] = cleanSeating({ ...s }, keep)
         }
-        const next = tidyExceptions({ ...team, seating, daySeating })
+        const next = settleSeating({ ...team, seating, daySeating })
         const unchanged = sameSeating(next.seating, team.seating) && sameDaySeating(next.daySeating, team.daySeating)
         return unchanged ? team : next
       })
@@ -450,8 +541,8 @@ export function reduce(project: Project, action: Action): Project {
     case 'floor/update':
       return updateFloor(project, action.id, (floor) => {
         const next: Floor = { ...floor }
-        if (action.patch.name !== undefined) next.name = String(action.patch.name)
-        if (action.patch.label !== undefined) next.label = String(action.patch.label).slice(0, 3)
+        if (action.patch.name !== undefined) next.name = boundedText(String(action.patch.name), LIMITS.name)
+        if (action.patch.label !== undefined) next.label = boundedText(String(action.patch.label), LIMITS.label)
         if (action.patch.plan !== undefined) next.plan = action.patch.plan
         return next.name === floor.name && next.label === floor.label && samePlan(next.plan, floor.plan) ? floor : next
       })
@@ -492,9 +583,9 @@ export function reduce(project: Project, action: Action): Project {
         const areas = floor.areas.map((area) => {
           if (area.id !== action.id) return area
           const next: Area = { ...area }
-          if (action.patch.name !== undefined) next.name = String(action.patch.name)
+          if (action.patch.name !== undefined) next.name = boundedText(String(action.patch.name), LIMITS.name)
           if (action.patch.kind !== undefined) next.kind = action.patch.kind
-          if (action.patch.capacity !== undefined) next.capacity = toCount(action.patch.capacity)
+          if (action.patch.capacity !== undefined) next.capacity = Math.min(LIMITS.seats, toCount(action.patch.capacity))
           if (action.patch.rect !== undefined) next.rect = clampRect(action.patch.rect)
           const same =
             next.name === area.name &&
@@ -519,10 +610,68 @@ export function reduce(project: Project, action: Action): Project {
       return pruneSeatings(next)
     }
 
+    case 'domain/add': {
+      const { domain } = action
+      if (project.domains.some((d) => d.id === domain.id)) return project
+      return { ...project, domains: [...project.domains, { id: domain.id, name: orgName(domain.name) }] }
+    }
+
+    case 'domain/rename': {
+      const name = orgName(action.name)
+      const domain = project.domains.find((d) => d.id === action.id)
+      if (!domain || domain.name === name) return project
+      return { ...project, domains: project.domains.map((d) => (d === domain ? { ...d, name } : d)) }
+    }
+
+    case 'domain/remove': {
+      if (!project.domains.some((d) => d.id === action.id)) return project
+      return {
+        ...project,
+        domains: project.domains.filter((d) => d.id !== action.id),
+        arts: project.arts.map((art) => (art.domainId === action.id ? { ...art, domainId: null } : art)),
+        teams: project.teams.map((team) => (team.domainId === action.id ? { ...team, domainId: null } : team)),
+      }
+    }
+
+    case 'art/add': {
+      const { art } = action
+      if (project.arts.some((a) => a.id === art.id)) return project
+      const domainId = project.domains.some((d) => d.id === art.domainId) ? art.domainId : null
+      return { ...project, arts: [...project.arts, { id: art.id, name: orgName(art.name), domainId }] }
+    }
+
+    case 'art/update': {
+      const art = project.arts.find((a) => a.id === action.id)
+      if (!art) return project
+      const { patch } = action
+      const name = patch.name !== undefined ? orgName(patch.name) : art.name
+      let domainId = art.domainId
+      if (patch.domainId !== undefined) {
+        domainId = patch.domainId !== null && project.domains.some((d) => d.id === patch.domainId) ? patch.domainId : null
+      }
+      if (name === art.name && domainId === art.domainId) return project
+      return {
+        ...project,
+        arts: project.arts.map((a) => (a === art ? { ...a, name, domainId } : a)),
+        teams: withArtDomain(project.teams, art.id, domainId),
+      }
+    }
+
+    case 'art/remove': {
+      if (!project.arts.some((a) => a.id === action.id)) return project
+      return {
+        ...project,
+        arts: project.arts.filter((a) => a.id !== action.id),
+        teams: project.teams.map((team) => (team.artId === action.id ? { ...team, artId: null } : team)),
+      }
+    }
+
     case 'issue/accept': {
-      const current = project.accepted[action.id]
-      if (current && current.note === action.note && current.detail === action.detail) return project
-      return { ...project, accepted: { ...project.accepted, [action.id]: { note: action.note, detail: action.detail } } }
+      const note = boundedText(String(action.note), LIMITS.acceptNote)
+      const detail = boundedText(String(action.detail), LIMITS.acceptDetail)
+      const current = Object.hasOwn(project.accepted, action.id) ? project.accepted[action.id] : undefined
+      if (current && current.note === note && current.detail === detail) return project
+      return { ...project, accepted: { ...project.accepted, [action.id]: { note, detail } } }
     }
 
     case 'issue/unaccept': {

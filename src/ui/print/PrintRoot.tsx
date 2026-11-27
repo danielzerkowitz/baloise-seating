@@ -1,7 +1,7 @@
 import { useEffect, type CSSProperties, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import type { Issue } from '../../domain/conflicts'
-import { dayLoad, describeSeating, isTeamDay, planAspect, seatsNeeded } from '../../domain/model'
+import { dayLoad, describeSeating, findArt, findDomain, isTeamDay, planAspect, seatsNeeded } from '../../domain/model'
 import { WEEKDAYS, WEEKDAY_NAME, type Floor, type Project, type Weekday } from '../../domain/types'
 import { getProject, useIssues, useProject } from '../../state/store'
 import { plural } from '../format'
@@ -53,7 +53,8 @@ function WeekPage(props: { project: Project; foot: ReactNode }) {
         <thead>
           <tr>
             <th scope="col">Team</th>
-            <th scope="col">Group</th>
+            <th scope="col">Domain</th>
+            <th scope="col">ART</th>
             <th scope="col" className="num">
               People
             </th>
@@ -70,7 +71,7 @@ function WeekPage(props: { project: Project; foot: ReactNode }) {
         <tbody>
           {project.teams.length === 0 ? (
             <tr>
-              <td colSpan={4 + WEEKDAYS.length} className="muted">
+              <td colSpan={5 + WEEKDAYS.length} className="muted">
                 There are no teams in this plan yet.
               </td>
             </tr>
@@ -83,7 +84,8 @@ function WeekPage(props: { project: Project; foot: ReactNode }) {
                   {team.name}
                 </span>
               </td>
-              <td>{team.group}</td>
+              <td>{findDomain(project, team.domainId)?.name}</td>
+              <td>{findArt(project, team.artId)?.name}</td>
               <td className="num">
                 <span className="sign print-number">{team.size}</span>
               </td>
@@ -102,7 +104,7 @@ function WeekPage(props: { project: Project; foot: ReactNode }) {
         </tbody>
         <tfoot>
           <tr className="print-row">
-            <td colSpan={4}>
+            <td colSpan={5}>
               <span className="print-total">Seats needed</span>
             </td>
             {WEEKDAYS.map((day) => {

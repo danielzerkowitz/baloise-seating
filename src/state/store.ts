@@ -3,7 +3,7 @@ import { findIssues, type Issue } from '../domain/conflicts'
 import { reduce, type Action } from '../domain/reducer'
 import type { Project } from '../domain/types'
 import { createHistoryStore, type DispatchOptions } from './createHistoryStore'
-import { loadSavedProject } from './persist'
+import { loadSavedProjectIfReadable, setAsideSavedProject } from './persist'
 import { createSaver, type SaveStatus } from './saving'
 import { startingProject } from './seed'
 import { planStorage } from './storage'
@@ -84,7 +84,8 @@ export type { SaveStatus } from './saving'
 const saver = createSaver(projectStore, {
   storage: planStorage,
   starting: startingProject,
-  leftInBrowser: loadSavedProject,
+  // Never blocks opening the shared plan: a leftover that cannot be read is left alone.
+  leftInBrowser: loadSavedProjectIfReadable,
 })
 
 /** Where the plan is kept: the shared database, or only this browser. */
@@ -98,6 +99,13 @@ export function useSaveStatus(): SaveStatus {
 export const loadLatestPlan = (): Promise<void> => saver.loadLatest()
 /** After a conflict: save this plan over the one someone else saved. */
 export const keepMyPlan = (): Promise<void> => saver.keepMine()
+
+/** Browser only, when the plan stored there cannot be read: keeps that plan aside in the
+ *  browser and starts a new one. */
+export async function startNewPlanInBrowser(): Promise<void> {
+  await setAsideSavedProject()
+  await startPersistence()
+}
 
 let listening = false
 

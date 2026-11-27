@@ -37,12 +37,21 @@ const NOT_SAVED_HELP: Record<typeof savedIn, string> = {
 const CONFLICT_HELP =
   'Someone else saved the plan since you opened it. Load theirs (your latest changes are dropped) or keep yours (theirs are overwritten).'
 
+const LOAD_THEIRS_FAILED =
+  'Their version could not be opened. If it was saved by a newer version of the planner, reload the page first.'
+const KEEP_MINE_FAILED = 'The database cannot be reached right now. Nothing was changed; try again in a moment.'
+
 /** After a conflict: take theirs or keep mine. */
 function ConflictChoice() {
   const [busy, setBusy] = useState(false)
-  const choose = (pick: () => Promise<void>) => {
+  const choose = (pick: () => Promise<void>, failed: string) => {
     setBusy(true)
-    void pick().finally(() => setBusy(false))
+    pick()
+      .catch((error: unknown) => {
+        console.warn(error)
+        toast(failed)
+      })
+      .finally(() => setBusy(false))
   }
   return (
     <span className="shell-conflict">
@@ -51,10 +60,10 @@ function ConflictChoice() {
         Changed elsewhere
         <span className="visually-hidden">. {CONFLICT_HELP}</span>
       </span>
-      <button type="button" className="btn btn--sm" disabled={busy} onClick={() => choose(loadLatestPlan)}>
+      <button type="button" className="btn btn--sm" disabled={busy} onClick={() => choose(loadLatestPlan, LOAD_THEIRS_FAILED)}>
         Load theirs
       </button>
-      <button type="button" className="btn btn--sm" disabled={busy} onClick={() => choose(keepMyPlan)}>
+      <button type="button" className="btn btn--sm" disabled={busy} onClick={() => choose(keepMyPlan, KEEP_MINE_FAILED)}>
         Keep mine
       </button>
     </span>

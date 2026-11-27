@@ -1,8 +1,9 @@
-/* The limits a plan is read back with when it is opened again (domain/files.ts keeps them
-   to itself). The fields of this view stop at the same limits, so that nothing typed here is
-   cut off the next time the plan is loaded. */
+import { LIMITS } from '../../domain/limits'
 
-export const MAX_NAME_LENGTH = 120
-export const MAX_GROUP_LENGTH = 60
-export const MAX_NOTES_LENGTH = 2000
-export const MAX_TEAM_SIZE = 5000
+/* The limits a plan is kept within (domain/limits.ts). The fields of this view stop at the
+   same limits, so that nothing typed here is cut off the next time the plan is loaded. */
+
+export const MAX_NAME_LENGTH = LIMITS.name
+export const MAX_ORG_NAME_LENGTH = LIMITS.orgName
+export const MAX_NOTES_LENGTH = LIMITS.notes
+export const MAX_TEAM_SIZE = LIMITS.teamSize

@@ -1,12 +1,12 @@
-import { useId, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from 'react'
 import { WEEKDAYS, WEEKDAY_NAME, WEEKDAY_SHORT, type Id, type Project } from '../../domain/types'
 import { useUi } from '../../state/ui'
 import { DayLoadHeader } from './DayLoadHeader'
 import { QuickAddRow } from './QuickAddRow'
 import { TeamRow } from './TeamRow'
 
-/** The columns before Monday: colour, team, code, group, people, seats. */
-const LEADING_COLUMNS = 6
+/** The columns before Monday: colour, team, code, domain, ART, people, seats. */
+const LEADING_COLUMNS = 7
 
 /** Arrow keys walk the grid of day cells: left and right along a team's week, up and down
  *  along a weekday. The day buttons of the row for adding a team are part of the grid. */
@@ -44,17 +44,14 @@ export function TeamsTable(props: {
   onOpenNotes: (teamId: Id) => void
   /** Called right before the only team that is left is removed from its row. */
   onRemoveLast: () => void
+  onEditOrg: () => void
 }) {
   const { project } = props
   const { focusTeamId } = useUi()
-  const groupsListId = useId()
 
   // A preferred floor is only a question when there is more than one floor.
   const withFloor = project.floors.length > 1
   const trailingColumns = withFloor ? 3 : 2
-  const groups = [...new Set(project.teams.map((team) => team.group.trim()).filter(Boolean))].sort((a, b) =>
-    a.localeCompare(b),
-  )
 
   return (
     <div className="teams-scroll">
@@ -66,7 +63,8 @@ export function TeamsTable(props: {
           <col className="teams-col--color" />
           <col />
           <col className="teams-col--code" />
-          <col className="teams-col--group" />
+          <col className="teams-col--domain" />
+          <col className="teams-col--art" />
           <col className="teams-col--people" />
           <col className="teams-col--seats" />
           {WEEKDAYS.map((day) => (
@@ -88,7 +86,10 @@ export function TeamsTable(props: {
               Code
             </th>
             <th scope="col" className="teams-th">
-              Group
+              Domain
+            </th>
+            <th scope="col" className="teams-th">
+              ART
             </th>
             <th scope="col" className="teams-th num">
               People
@@ -122,7 +123,7 @@ export function TeamsTable(props: {
               key={team.id}
               project={project}
               team={team}
-              groupsListId={groupsListId}
+              onEditOrg={props.onEditOrg}
               focusName={team.id === focusTeamId}
               withFloor={withFloor}
               onOpenNotes={props.onOpenNotes}
@@ -132,11 +133,6 @@ export function TeamsTable(props: {
           <QuickAddRow nameRef={props.quickAddNameRef} trailingColumns={trailingColumns} />
         </tbody>
       </table>
-      <datalist id={groupsListId}>
-        {groups.map((group) => (
-          <option key={group} value={group} />
-        ))}
-      </datalist>
     </div>
   )
 }

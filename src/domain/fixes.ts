@@ -81,7 +81,10 @@ function isSolved(before: Project, after: Project, issue: Issue, issuesAfter: re
  *  that should sit in one place is apart over floors or on one floor. */
 function problemOf(issue: Issue): string {
   const apart = issue.rule === 'team-split-floors' || issue.rule === 'team-scattered'
-  return `${apart ? 'apart' : issue.rule}|${issue.day}|${issue.teamIds.join('+')}`
+  // No seats or too few: either way the team still needs seats that day. A fix that turns
+  // "no seats" into "too few" has not given the team its seats.
+  const needsSeats = issue.rule === 'team-unseated' || issue.rule === 'team-short'
+  return `${apart ? 'apart' : needsSeats ? 'needs-seats' : issue.rule}|${issue.day}|${issue.teamIds.join('+')}`
 }
 
 /** True when the result has seats in conflict that were not in conflict before: a conflict
@@ -117,7 +120,15 @@ function seatsInConflict(project: Project, issue: Issue): number {
 function takesNeededSeats(before: Project, after: Project): boolean {
   return after.teams.some((team) => {
     const was = findTeam(before, team.id)
-    return was !== undefined && team.days.some((day) => seatsCovered(after, team, day) < seatsCovered(before, was, day))
+    if (was === undefined) return false
+    if (team.days.some((day) => seatsCovered(after, team, day) < seatsCovered(before, was, day))) return true
+    // A team that moves to another day must arrive there with the seats it had, which the
+    // comparison day by day cannot see: with as many team days as before, it may not hold
+    // fewer of its seats over the week. (Taking a day off the plan gives seats up on purpose.)
+    if (team.days.length !== was.days.length) return false
+    const overTheWeek = (project: Project, each: Team) =>
+      each.days.reduce((sum, day) => sum + seatsCovered(project, each, day), 0)
+    return overTheWeek(after, team) < overTheWeek(before, was)
   })
 }
 

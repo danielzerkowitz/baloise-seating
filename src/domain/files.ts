@@ -1,6 +1,17 @@
 import { nextTeamColor, normalizeHex } from './color'
-import { clampRect, floorLabelFromName, newId, sameSeating, seatingOn, seatsNeeded, sortDays, teamCode } from './model'
-import { MAX_RESERVE, MIN_ATTENDANCE } from './reducer'
+import {
+  clampRect,
+  floorLabelFromName,
+  newId,
+  sameSeating,
+  seatingOn,
+  seatsNeeded,
+  sortDays,
+  teamCode,
+  teamOrg,
+} from './model'
+import { cleanText, LIMITS } from './limits'
+import { MAX_RESERVE, MIN_ATTENDANCE, settleSeating } from './reducer'
 import {
   AREA_KIND_NAME,
   DAY_WISH_NAME,
@@ -10,7 +21,9 @@ import {
   WEEKDAYS,
   type AcceptedIssue,
   type Area,
+  type Art,
   type DayWish,
+  type Domain,
   type Floor,
   type Id,
   type PlanImage,
@@ -42,18 +55,19 @@ const TOO_LARGE = 'This file is too large to be a seating plan.'
 const MAX_FLOORS = 200
 const MAX_AREAS_PER_FLOOR = 2000
 const MAX_TEAMS = 5000
+const MAX_DOMAINS = 500
+const MAX_ARTS = 2000
 
 // The bounds that values are brought back to.
-const MAX_NAME_LENGTH = 120
-const MAX_LABEL_LENGTH = 3
-const MAX_CODE_LENGTH = 4
-const MAX_GROUP_LENGTH = 60
-const MAX_NOTES_LENGTH = 2000
+const MAX_NAME_LENGTH = LIMITS.name
+const MAX_LABEL_LENGTH = LIMITS.label
+const MAX_CODE_LENGTH = LIMITS.code
+const MAX_ORG_NAME_LENGTH = LIMITS.orgName
+const MAX_NOTES_LENGTH = LIMITS.notes
 /** The seats of one area, and the seats one team can hold in one area. */
-const MAX_SEATS = 1000
-const MAX_TEAM_SIZE = 5000
+const MAX_SEATS = LIMITS.seats
+const MAX_TEAM_SIZE = LIMITS.teamSize
 const MAX_ACCEPTED = 2000
-const MAX_ACCEPTED_TEXT_LENGTH = 500
 
 const DEFAULT_PROJECT_NAME = 'Office plan'
 
@@ -108,7 +122,7 @@ function cut(text: string, max: number): string {
 
 /** Free text of at most `max` characters; '' when the value is not a string. */
 function freeText(value: unknown, max: number): string {
-  return typeof value === 'string' ? cut(value, max) : ''
+  return typeof value === 'string' ? cut(cleanText(value), max) : ''
 }
 
 /** A name: trimmed and of at most 120 characters. `fallback` when the value is not a string
@@ -116,7 +130,8 @@ function freeText(value: unknown, max: number): string {
 function readName(value: unknown, fallback: string): string {
   // Cutting can leave a space at the end. It is trimmed off as well, so that reading the
   // result a second time changes nothing.
-  const name = typeof value === 'string' ? cut(value.trim(), MAX_NAME_LENGTH).trimEnd() : ''
+  // Without characters that cannot be stored (a NUL makes the database refuse the plan).
+  const name = typeof value === 'string' ? cut(cleanText(value).trim(), MAX_NAME_LENGTH).trimEnd() : ''
   return name === '' ? fallback : name
 }
 
@@ -156,6 +171,14 @@ interface KnownIds {
   floors: Set<Id>
   areas: Set<Id>
   teams: Set<Id>
+  domains: Set<Id>
+  arts: Set<Id>
+}
+
+/** Domains and ARTs as read so far. Teams of a version 1 plan add a domain for their group. */
+interface Org {
+  domains: Domain[]
+  arts: Art[]
 }
 
 /** Turns unknown data into a valid project that satisfies every invariant in types.ts.
@@ -176,21 +199,33 @@ export function normalizeProject(input: unknown): Project {
   const rawTeams = field(raw, 'teams')
   if (!Array.isArray(rawFloors) || !Array.isArray(rawTeams)) throw new ProjectFormatError(NOT_A_PLANNER_FILE)
   if (rawFloors.length > MAX_FLOORS || rawTeams.length > MAX_TEAMS) throw new ProjectFormatError(TOO_LARGE)
+  const rawDomains = listField(raw, 'domains')
+  const rawArts = listField(raw, 'arts')
+  if (rawDomains.length > MAX_DOMAINS || rawArts.length > MAX_ARTS) throw new ProjectFormatError(TOO_LARGE)
 
-  const ids: KnownIds = { floors: new Set(), areas: new Set(), teams: new Set() }
+  const ids: KnownIds = { floors: new Set(), areas: new Set(), teams: new Set(), domains: new Set(), arts: new Set() }
   const floors: Floor[] = []
   for (const entry of rawFloors) {
     if (isRecord(entry)) floors.push(readFloor(entry, floors.length + 1, ids))
   }
-  // Teams come after the floors: what they refer to must be known by now.
+  const org: Org = { domains: [], arts: [] }
+  for (const entry of rawDomains) {
+    if (isRecord(entry)) org.domains.push(readDomain(entry, org.domains.length + 1, ids))
+  }
+  // ARTs after the domains, teams after everything: what they refer to must be known by now.
+  for (const entry of rawArts) {
+    if (isRecord(entry)) org.arts.push(readArt(entry, org.arts.length + 1, ids))
+  }
   const teams: Team[] = []
   for (const entry of rawTeams) {
-    if (isRecord(entry)) teams.push(readTeam(entry, teams, ids))
+    if (isRecord(entry)) teams.push(readTeam(entry, teams, ids, org))
   }
   return {
     schemaVersion: SCHEMA_VERSION,
     name: readName(field(raw, 'name'), DEFAULT_PROJECT_NAME),
     floors,
+    domains: org.domains,
+    arts: org.arts,
     teams,
     settings: readSettings(field(raw, 'settings')),
     accepted: readAccepted(field(raw, 'accepted')),
@@ -203,6 +238,57 @@ function projectIn(input: Untrusted): Untrusted {
   const isProject = Array.isArray(field(input, 'floors')) && Array.isArray(field(input, 'teams'))
   const wrapped = field(input, 'project')
   return !isProject && isRecord(wrapped) ? wrapped : input
+}
+
+/** A list field; empty when it is missing or not a list (a version 1 plan has no domains). */
+function listField(source: Untrusted, key: string): unknown[] {
+  const value = field(source, key)
+  return Array.isArray(value) ? value : []
+}
+
+/** The name of a domain or ART, read like any other name but within their own bound. */
+function readOrgName(value: unknown, fallback: string): string {
+  const name = typeof value === 'string' ? cut(cleanText(value).trim(), MAX_ORG_NAME_LENGTH).trimEnd() : ''
+  return name === '' ? fallback : name
+}
+
+function readDomain(raw: Untrusted, position: number, ids: KnownIds): Domain {
+  return {
+    id: claimId(field(raw, 'id'), ids.domains, 'domain'),
+    name: readOrgName(field(raw, 'name'), `Domain ${position}`),
+  }
+}
+
+function readArt(raw: Untrusted, position: number, ids: KnownIds): Art {
+  const domainId = field(raw, 'domainId')
+  return {
+    id: claimId(field(raw, 'id'), ids.arts, 'art'),
+    name: readOrgName(field(raw, 'name'), `ART ${position}`),
+    domainId: typeof domainId === 'string' && ids.domains.has(domainId) ? domainId : null,
+  }
+}
+
+/** A team's domain and ART. An ART that exists decides the domain. A plan from before
+ *  domains had a free-text group: it becomes a domain of that name, shared by all teams
+ *  with the same group (ignoring case). */
+function readTeamOrg(raw: Untrusted, ids: KnownIds, org: Org): { domainId: Id | null; artId: Id | null } {
+  const artId = field(raw, 'artId')
+  const art = typeof artId === 'string' && ids.arts.has(artId) ? org.arts.find((a) => a.id === artId) : undefined
+  if (art) return { domainId: art.domainId, artId: art.id }
+  const domainId = field(raw, 'domainId')
+  if (typeof domainId === 'string' && ids.domains.has(domainId)) return { domainId, artId: null }
+  const group = field(raw, 'group')
+  if (domainId !== undefined || artId !== undefined || typeof group !== 'string') return { domainId: null, artId: null }
+  const name = readOrgName(group, '')
+  if (name === '') return { domainId: null, artId: null }
+  const key = name.toLowerCase()
+  let domain = org.domains.find((d) => d.name.toLowerCase() === key)
+  if (!domain) {
+    if (org.domains.length >= MAX_DOMAINS) return { domainId: null, artId: null }
+    domain = { id: claimId(undefined, ids.domains, 'domain'), name }
+    org.domains.push(domain)
+  }
+  return { domainId: domain.id, artId: null }
 }
 
 function isNewerVersion(source: Untrusted): boolean {
@@ -266,7 +352,7 @@ function readRect(raw: unknown): Rect {
 
 /** `earlier` are the teams before this one in the list, already read: a team without a code
  *  or colour gets one that they do not use. */
-function readTeam(raw: Untrusted, earlier: readonly Team[], ids: KnownIds): Team {
+function readTeam(raw: Untrusted, earlier: readonly Team[], ids: KnownIds, org: Org): Team {
   const name = readName(field(raw, 'name'), `Team ${earlier.length + 1}`)
   const code = field(raw, 'code')
   const color = field(raw, 'color')
@@ -274,7 +360,9 @@ function readTeam(raw: Untrusted, earlier: readonly Team[], ids: KnownIds): Team
   const homeFloorId = field(raw, 'homeFloorId')
   const days = readDays(field(raw, 'days'))
   const seating = readSeating(field(raw, 'seating'), ids.areas)
-  return {
+  // The same rule as after every edit: the normal seating is never hidden behind a seating
+  // of its own on every team day (plans saved by an earlier version can have that).
+  return settleSeating({
     id: claimId(field(raw, 'id'), ids.teams, 'team'),
     name,
     // As in makeTeam: only a missing code is made up; an emptied one stays empty.
@@ -282,7 +370,7 @@ function readTeam(raw: Untrusted, earlier: readonly Team[], ids: KnownIds): Team
     size: wholeNumber(field(raw, 'size'), MAX_TEAM_SIZE),
     color:
       (typeof color === 'string' ? normalizeHex(color) : null) ?? nextTeamColor(earlier.map((team) => team.color)),
-    group: freeText(field(raw, 'group'), MAX_GROUP_LENGTH),
+    ...readTeamOrg(raw, ids, org),
     wishes: readWishes(field(raw, 'wishes')),
     days,
     attendance: attendance === null ? null : clamp(attendance, MIN_ATTENDANCE, 1),
@@ -290,7 +378,7 @@ function readTeam(raw: Untrusted, earlier: readonly Team[], ids: KnownIds): Team
     seating,
     daySeating: readDaySeating(field(raw, 'daySeating'), days, seating, ids.areas),
     notes: freeText(field(raw, 'notes'), MAX_NOTES_LENGTH),
-  }
+  })
 }
 
 function readWishes(raw: unknown): Record<Weekday, DayWish> {
@@ -364,7 +452,9 @@ function readAccepted(raw: unknown): Record<string, AcceptedIssue> {
     const note = field(entry, 'note')
     const detail = field(entry, 'detail')
     if (typeof note !== 'string' || typeof detail !== 'string') continue
-    accepted[issueId] = { note: cut(note, MAX_ACCEPTED_TEXT_LENGTH), detail: cut(detail, MAX_ACCEPTED_TEXT_LENGTH) }
+    // The detail is compared with the issue's text as it is, so it must come back whole:
+    // its bound lies far above anything the planner generates.
+    accepted[issueId] = { note: cut(cleanText(note), LIMITS.acceptNote), detail: cut(cleanText(detail), LIMITS.acceptDetail) }
     kept += 1
   }
   return accepted
@@ -429,21 +519,23 @@ export function csvSeparatorFor(locale?: string): ',' | ';' {
 
 /** The seating plan as CSV text for a spreadsheet: separated by commas (or by semicolons,
  *  see `csvSeparatorFor`), quoted where needed, lines ending in CRLF, with a header row:
- *  Day, Team, Code, Group, People, Seats needed, Floor, Area, Seats. Ordered by weekday,
+ *  Day, Team, Code, Domain, ART, People, Seats needed, Floor, Area, Seats. Ordered by weekday,
  *  then team, floor and area. One row per team, day and area; a team day without seats
  *  still gets one row with empty Floor/Area and 0 seats. */
 export function seatingCsv(project: Project, separator: ',' | ';' = ','): string {
   const csvLine = (cells: readonly (string | number)[]) =>
     cells.map((cell) => (typeof cell === 'number' ? String(cell) : csvText(cell, separator))).join(separator)
-  const lines = [csvLine(['Day', 'Team', 'Code', 'Group', 'People', 'Seats needed', 'Floor', 'Area', 'Seats'])]
+  const lines = [csvLine(['Day', 'Team', 'Code', 'Domain', 'ART', 'People', 'Seats needed', 'Floor', 'Area', 'Seats'])]
   for (const day of WEEKDAYS) {
     for (const team of project.teams) {
       if (!team.days.includes(day)) continue
+      const { domain, art } = teamOrg(project, team)
       const aboutTeam = [
         WEEKDAY_NAME[day],
         team.name,
         team.code,
-        team.group,
+        domain?.name ?? '',
+        art?.name ?? '',
         team.size,
         seatsNeeded(team, project.settings),
       ]
@@ -494,7 +586,10 @@ export interface ParsedTeamRow {
   name: string
   size: number
   days: Weekday[]
-  group: string
+  /** The first other text on the line: a domain, or the name of an ART that exists. */
+  domain: string
+  /** The second other text: an ART. */
+  art: string
   /** 1-based line number in the pasted text. */
   line: number
 }
@@ -508,11 +603,12 @@ export interface ParsedTeams {
 const MAX_PASTED_TEAMS = 500
 
 /** Reads teams pasted from a spreadsheet or typed by hand: one team per line with name,
- *  size, optional days and optional group, separated by tabs, semicolons or commas.
+ *  size, optional days, an optional domain and an optional ART, separated by tabs, semicolons
+ *  or commas.
  *
  *  The first field is the name and the first later field that starts with a number is the
  *  size ("8", "7,5 FTE", "12 people"; rounded). Of the other fields, those that consist of
- *  weekdays only are the days, and the first that does not is the group. Days may be written
+ *  weekdays only are the days, the first that does not is the domain and the second the ART. Days may be written
  *  in English, Dutch, German or French, full or abbreviated, e.g. "Tue Thu", "di/do",
  *  "Dienstag, Donnerstag". A hyphen does not separate days: "Tue-Thu" could mean two days or
  *  three, so it is not read as days.
@@ -525,10 +621,7 @@ export function parseTeamsText(text: string): ParsedTeams {
   const problems: string[] = []
   const namesRead = new Set<string>()
   let headerMayFollow = true
-  const lines = text.split(/\r\n|\r|\n/)
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = index + 1
-    const lineText = lines[index] ?? ''
+  for (const { text: lineText, line } of splitRecords(text)) {
     const fields = splitLine(lineText)
     if (fields.every((value) => value === '')) continue
     // Only the first line with something on it can be the header.
@@ -543,7 +636,8 @@ export function parseTeamsText(text: string): ParsedTeams {
     }
     let size: number | null = null
     const days = new Set<Weekday>()
-    let group = ''
+    let domain = ''
+    let art = ''
     for (const value of fields.slice(1)) {
       if (value === '') continue
       if (size === null) {
@@ -552,7 +646,8 @@ export function parseTeamsText(text: string): ParsedTeams {
       }
       const weekdays = weekdaysIn(value)
       if (weekdays !== null) for (const day of weekdays) days.add(day)
-      else if (group === '') group = cut(value, MAX_GROUP_LENGTH).trimEnd()
+      else if (domain === '') domain = cut(value, MAX_ORG_NAME_LENGTH).trimEnd()
+      else if (art === '') art = cut(value, MAX_ORG_NAME_LENGTH).trimEnd()
     }
     if (size === null) {
       problems.push(`Line ${line}: no team size found for ${name}`)
@@ -574,7 +669,7 @@ export function parseTeamsText(text: string): ParsedTeams {
       break
     }
     namesRead.add(nameKey)
-    rows.push({ name, size, days: sortDays(days), group, line })
+    rows.push({ name, size, days: sortDays(days), domain, art, line })
   }
   return { rows, problems }
 }
@@ -583,6 +678,50 @@ export function parseTeamsText(text: string): ParsedTeams {
  *  tabs when it has any, else at semicolons when it has any, else at commas. A field in
  *  double quotes can contain the separator (spreadsheets write such cells that way); inside
  *  it, two quotes stand for one. */
+/** The pasted text as one record per team, each with the line it starts on. A spreadsheet
+ *  copies a cell that has a line break in it inside quotes: such a break does not end the
+ *  record, it becomes a space ("Claims" + "Intake" in one cell is the team Claims Intake).
+ *  When a quote is never closed the text is simply read line by line. */
+function splitRecords(text: string): { text: string; line: number }[] {
+  const records: { text: string; line: number }[] = []
+  let current = ''
+  let line = 1
+  let startLine = 1
+  let inQuotes = false
+  let atFieldStart = true
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text.charAt(i)
+    const isBreak = char === '\r' || char === '\n'
+    if (isBreak && char === '\r' && text.charAt(i + 1) === '\n') i += 1
+    if (inQuotes) {
+      if (isBreak) {
+        line += 1
+        current += ' '
+      } else if (char === '"' && text.charAt(i + 1) === '"') {
+        current += '""'
+        i += 1
+      } else {
+        if (char === '"') inQuotes = false
+        current += char
+      }
+    } else if (isBreak) {
+      records.push({ text: current, line: startLine })
+      current = ''
+      line += 1
+      startLine = line
+      atFieldStart = true
+    } else {
+      // As in splitLine: a quote only opens a quoted cell at the start of a cell.
+      if (char === '"' && atFieldStart) inQuotes = true
+      atFieldStart = char === '\t' || char === ';' || char === ',' || (atFieldStart && char === ' ')
+      current += char
+    }
+  }
+  records.push({ text: current, line: startLine })
+  if (inQuotes) return text.split(/\r\n|\r|\n/).map((each, index) => ({ text: each, line: index + 1 }))
+  return records
+}
+
 function splitLine(line: string): string[] {
   const separator = line.includes('\t') ? '\t' : line.includes(';') ? ';' : ','
   const fields: string[] = []
@@ -639,11 +778,11 @@ function leadingNumber(value: string): number | null {
 
 /** How the weekdays are written in English, Dutch, German and French. */
 const WEEKDAY_WORDS: Record<Weekday, string> = {
-  mon: 'mon monday ma maandag mo montag lun lundi',
-  tue: 'tue tues tuesday di dinsdag dienstag mar mardi',
-  wed: 'wed weds wednesday wo woe woensdag mi mittwoch mer mercredi',
-  thu: 'thu thur thurs thursday do donderdag donnerstag jeu jeudi',
-  fri: 'fri friday vr vrij vrijdag fr freitag ven vendredi',
+  mon: 'mon monday mondays ma maandag maandagen mo montag montags lun lundi lundis',
+  tue: 'tue tues tuesday tuesdays di dinsdag dinsdagen dienstag dienstags mar mardi mardis',
+  wed: 'wed weds wednesday wednesdays wo woe woensdag woensdagen mi mittwoch mittwochs mer mercredi mercredis',
+  thu: 'thu thur thurs thursday thursdays do donderdag donderdagen donnerstag donnerstags jeu jeudi jeudis',
+  fri: 'fri friday fridays vr vrij vrijdag vrijdagen fr freitag freitags ven vendredi vendredis',
 }
 
 const WEEKDAY_OF_WORD: ReadonlyMap<string, Weekday> = new Map(
@@ -674,8 +813,9 @@ const HEADING_WORDS: ReadonlySet<string> = new Set(
   [
     'name team teams teamname size teamsize people persons headcount head count fte ftes members employees staff',
     'number of days day teamdays weekdays office group department dept division unit tribe',
+    'domain domains art arts release train trains agile',
     'naam teamnaam grootte omvang aantal personen mensen medewerkers leden dagen dag teamdagen weekdagen',
-    'kantoordagen groep afdeling van',
+    'kantoordagen groep afdeling van domein domeinen',
     'große grosse groesse teamgroße teamgrosse anzahl mitarbeiter mitarbeitende kopfe tage tag teamtage',
     'wochentage burotage gruppe abteilung bereich',
     'nom equipe equipes taille effectif effectifs personnes nombre nb jours jour groupe departement service',

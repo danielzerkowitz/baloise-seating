@@ -11,7 +11,7 @@ import { RULE_SEVERITY, findIssues, type Issue, type IssueRule } from './conflic
 import { suggestDayMoves } from './dayMoves'
 import { suggestFixes, type Fix } from './fixes'
 import { dayLoad, dayOccupancy, sameSeating, sumSeats, teamDayStatus, type TeamDayStatus } from './model'
-import { reduce } from './reducer'
+import { reduce, settleSeating } from './reducer'
 import { area, floor, project, row, team, violations } from './testkit'
 import {
   WEEKDAYS,
@@ -155,9 +155,12 @@ function expectPromiseKept(p: Project, issue: Issue, fix: Fix, where: string): v
   expect(result, what).not.toBe(p)
   expect(violations(result), what).toEqual([])
 
-  expect(ids(findIssues(result)), what).not.toContain(issue.id)
   if (issue.day !== null && DAY_RULES.includes(issue.rule)) {
+    // A day that is too full keeps its issue (and its id) until it fits; every seat less
+    // is the help that was promised.
     expect(dayLoad(result, issue.day).needed, what).toBeLessThan(dayLoad(p, issue.day).needed)
+  } else {
+    expect(ids(findIssues(result)), what).not.toContain(issue.id)
   }
 
   const conflictsBefore = conflictsOf(p)
@@ -169,6 +172,14 @@ function expectPromiseKept(p: Project, issue: Issue, fix: Fix, where: string): v
     for (const day of now.days) {
       const seats = `${what}: seats of ${now.id} on ${day}`
       expect(seatsCovered(result, now, day), seats).toBeGreaterThanOrEqual(seatsCovered(p, was, day))
+    }
+    // And over the week: a team that moved to another day arrives with the seats it had.
+    if (now.days.length === was.days.length) {
+      const overTheWeek = (plan: Project, team: Team) =>
+        team.days.reduce((sum, day) => sum + seatsCovered(plan, team, day), 0)
+      expect(overTheWeek(result, now), `${what}: seats of ${now.id} over the week`).toBeGreaterThanOrEqual(
+        overTheWeek(p, was),
+      )
     }
   }
   for (const day of WEEKDAYS) {
@@ -262,7 +273,7 @@ function seatingFix(p: Project, teamId: string, label: string, options: { restar
 describe('area-over-capacity', () => {
   it('offers to reseat either team, the one with the fewest seats there first', () => {
     const p = project([floor4()], [claims(4, ['tue', 'thu'], { ne1: 4 }), under(2, ['tue'], { ne1: 2 })])
-    const fixes = fixesFor(p, 'area-over-capacity|tue|4|ne1|claims+under')
+    const fixes = fixesFor(p, 'area-over-capacity|tue|-|ne1|-')
     expect(fixes).toEqual([
       seatingFix(p, 'under', 'Reseat Underwriting', { restart: true }),
       seatingFix(p, 'claims', 'Reseat Claims Intake', { restart: true }),
@@ -278,14 +289,14 @@ describe('area-over-capacity', () => {
 
   it('takes teams with equally many seats in list order', () => {
     const p = project([floor4()], [team('first', 3, ['tue'], { ne1: 3 }), team('second', 3, ['tue'], { ne1: 3 })])
-    const fixes = fixesFor(p, 'area-over-capacity|tue|4|ne1|first+second')
+    const fixes = fixesFor(p, 'area-over-capacity|tue|-|ne1|-')
     expect(fixes.map((fix) => fix.label)).toEqual(['Reseat First', 'Reseat Second'])
   })
 
   it('tries two teams at most', () => {
     // Any of the three could make room for the other two.
     const p = project([floor4()], ['one', 'two', 'three'].map((id) => team(id, 2, ['tue'], { ne1: 2 })))
-    const fixes = fixesFor(p, 'area-over-capacity|tue|4|ne1|one+two+three')
+    const fixes = fixesFor(p, 'area-over-capacity|tue|-|ne1|-')
     expect(fixes.map((fix) => fix.label)).toEqual(['Reseat One', 'Reseat Two'])
   })
 
@@ -295,7 +306,7 @@ describe('area-over-capacity', () => {
       [floor4()],
       [team('one', 1, ['tue'], { ne1: 1 }), team('two', 1, ['tue'], { ne1: 1 }), team('four', 4, ['tue'], { ne1: 4 })],
     )
-    const fix = only(fixesFor(p, 'area-over-capacity|tue|4|ne1|one+two+four'))
+    const fix = only(fixesFor(p, 'area-over-capacity|tue|-|ne1|-'))
     expect(fix).toEqual(seatingFix(p, 'four', 'Reseat Four', { restart: true }))
     expect(idsAfter(p, fix)).toEqual([])
   })
@@ -304,13 +315,13 @@ describe('area-over-capacity', () => {
     // Three teams of two in an area for two: whoever leaves, four seats are still taken.
     const small = floor('4', [area('nook', 2, { name: 'Nook' }), ...deskRow('ne', 3, 4, 0.5)])
     const p = project([small], ['one', 'two', 'three'].map((id) => team(id, 2, ['tue'], { nook: 2 })))
-    expect(fixesFor(p, 'area-over-capacity|tue|4|nook|one+two+three')).toEqual([])
+    expect(fixesFor(p, 'area-over-capacity|tue|-|nook|-')).toEqual([])
   })
 
   it('offers nothing when there is no other place', () => {
     const oneArea = floor('4', deskRow('ne', 1, 4))
     const p = project([oneArea], [claims(4, ['tue'], { ne1: 4 }), under(2, ['tue'], { ne1: 2 })])
-    expect(fixesFor(p, 'area-over-capacity|tue|4|ne1|claims+under')).toEqual([])
+    expect(fixesFor(p, 'area-over-capacity|tue|-|ne1|-')).toEqual([])
   })
 
   it('does not reseat a team that would then lack seats on another of its days', () => {
@@ -327,12 +338,12 @@ describe('area-over-capacity', () => {
         ],
       )
     const full = plan([holder('x', ['thu'], { ne1: 4 }), holder('y', ['thu'], { ne2: 4 })])
-    expect(fixesFor(full, 'area-over-capacity|tue|4|ne1|claims+under').map((fix) => fix.label)).toEqual([
+    expect(fixesFor(full, 'area-over-capacity|tue|-|ne1|-').map((fix) => fix.label)).toEqual([
       'Reseat Claims Intake',
     ])
     // With room on Thursday the team is offered first, as the one with the fewest seats.
     const room = plan([holder('x', ['thu'], { ne1: 4 })])
-    expect(fixesFor(room, 'area-over-capacity|tue|4|ne1|claims+under').map((fix) => fix.label)).toEqual([
+    expect(fixesFor(room, 'area-over-capacity|tue|-|ne1|-').map((fix) => fix.label)).toEqual([
       'Reseat Underwriting',
       'Reseat Claims Intake',
     ])
@@ -340,7 +351,7 @@ describe('area-over-capacity', () => {
 
   it('reseats a team that overfills an area on its own', () => {
     const p = project([floor4()], [claims(6, ['tue'], { ne1: 6 })])
-    const fix = only(fixesFor(p, 'area-over-capacity|tue|4|ne1|claims'))
+    const fix = only(fixesFor(p, 'area-over-capacity|tue|-|ne1|-'))
     expect(fix.label).toBe('Reseat Claims Intake')
     expect(idsAfter(p, fix)).toEqual([])
   })
@@ -348,7 +359,7 @@ describe('area-over-capacity', () => {
   it('finds desks for a team from an overflow area that is too full', () => {
     // Four seats taken on a bench for three.
     const p = project([floor4()], [claims(2, ['tue'], { bench: 2 }), under(2, ['tue'], { bench: 2 })])
-    const fixes = fixesFor(p, 'area-over-capacity|tue|4|bench|claims+under')
+    const fixes = fixesFor(p, 'area-over-capacity|tue|-|bench|-')
     expect(fixes.map((fix) => fix.label)).toEqual(['Reseat Claims Intake', 'Reseat Underwriting'])
     const atDesks = { inDesks: 2, inOverflow: 0 }
     expect(seatedOn(apply(p, labelled(fixes, 'Reseat Claims Intake')), 'claims', 'tue')).toMatchObject(atDesks)
@@ -359,7 +370,7 @@ describe('area-over-capacity', () => {
 describe('seats-in-room', () => {
   it('offers to take the seats out of the room', () => {
     const p = project([floor4()], [under(3, ['tue'], { room: 3 })])
-    const fix = only(fixesFor(p, 'seats-in-room|tue|4|room|under'))
+    const fix = only(fixesFor(p, 'seats-in-room|tue|-|room|under'))
     expect(fix).toEqual({
       id: 'seat/set|under|room',
       label: 'Remove these seats',
@@ -372,8 +383,8 @@ describe('seats-in-room', () => {
 
   it('takes them out of the normal seating, so on every day that uses it', () => {
     const p = project([floor4()], [under(3, ['tue', 'thu'], { ne1: 3, room: 1 })])
-    expect(ids(findIssues(p))).toEqual(['seats-in-room|tue|4|room|under', 'seats-in-room|thu|4|room|under'])
-    const fix = only(fixesFor(p, 'seats-in-room|thu|4|room|under'))
+    expect(ids(findIssues(p))).toEqual(['seats-in-room|tue|-|room|under', 'seats-in-room|thu|-|room|under'])
+    const fix = only(fixesFor(p, 'seats-in-room|thu|-|room|under'))
     expect(fix.explanation).toBe("Takes Underwriting's 1 seat out of Meeting room 4.1")
     expect(idsAfter(p, fix)).toEqual([])
   })
@@ -385,15 +396,15 @@ describe('seats-in-room', () => {
       area('room2', 6, { kind: 'no-seating', name: 'Meeting room 4.2' }),
     ])
     const p = project([twoRooms], [under(4, ['tue'], { ne1: 2, room1: 1, room2: 1 })])
-    const fix = only(fixesFor(p, 'seats-in-room|tue|4|room2|under'))
+    const fix = only(fixesFor(p, 'seats-in-room|tue|-|room2|under'))
     expect(fix.id).toBe('seat/set|under|room2')
     expect(fix.explanation).toBe("Takes Underwriting's 1 seat out of Meeting room 4.2")
-    expect(idsAfter(p, fix)).toEqual(['seats-in-room|tue|4|room1|under', 'team-short|tue|4|-|under'])
+    expect(idsAfter(p, fix)).toEqual(['seats-in-room|tue|-|room1|under', 'team-short|tue|-|-|under'])
   })
 
   it('takes them out of the day exception when the team has one on that day', () => {
     const p = project([floor4()], [under(3, ['tue', 'thu'], { ne1: 3 }, { daySeating: { tue: { ne1: 2, room: 1 } } })])
-    const fix = only(fixesFor(p, 'seats-in-room|tue|4|room|under'))
+    const fix = only(fixesFor(p, 'seats-in-room|tue|-|room|under'))
     expect(fix.action).toEqual({ type: 'seat/set', teamId: 'under', areaId: 'room', seats: 0, scope: 'tue' })
     // The seats that are counted are those of the day as well.
     expect(fix.explanation).toBe("Takes Underwriting's 1 seat out of Meeting room 4.1")
@@ -405,7 +416,7 @@ describe('day-over-capacity, day-needs-overflow and day-uses-reserve', () => {
   it('offers the moves that suggestDayMoves finds, in its order', () => {
     // 22 seats needed on 20 desks.
     const p = office([team('alpha', 12, ['tue']), team('beta', 10, ['tue', 'thu']), team('gamma', 3, ['mon'])])
-    const fixes = fixesFor(p, 'day-over-capacity|tue|-|-|alpha+beta')
+    const fixes = fixesFor(p, 'day-over-capacity|tue|-|-|-')
     expect(fixes).toEqual([
       {
         id: 'team/moveDay|beta|wed',
@@ -433,7 +444,7 @@ describe('day-over-capacity, day-needs-overflow and day-uses-reserve', () => {
 
   it('says "ask the team first" only for a day the team said nothing about', () => {
     const p = office([saying(team('alpha', 12, ['tue']), { wed: 'can' }), team('beta', 10, ['tue'])])
-    const fixes = fixesFor(p, 'day-over-capacity|tue|-|-|alpha+beta')
+    const fixes = fixesFor(p, 'day-over-capacity|tue|-|-|-')
     expect(fixes.map((fix) => [fix.label, fix.explanation])).toEqual([
       ['Move Alpha to Wednesday', 'Wednesday has 20 desks free and Alpha said it could come then'],
       ['Move Beta to Monday', 'Monday has 20 desks free; Beta was not asked about Monday yet. Ask the team first'],
@@ -446,14 +457,14 @@ describe('day-over-capacity, day-needs-overflow and day-uses-reserve', () => {
       [floor('1', [area('desks', 10), area('touchdown', 2, { kind: 'overflow' })])],
       [team('big', 8, ['tue']), team('small', 3, ['tue'])],
     )
-    const fixes = fixesFor(p, 'day-needs-overflow|tue|-|-|big+small')
+    const fixes = fixesFor(p, 'day-needs-overflow|tue|-|-|-')
     expect(fixes.map((fix) => fix.label)).toEqual(['Move Small to Monday', 'Move Big to Monday'])
   })
 
   it('offers moves for a day that eats into the reserve', () => {
     // 16 seats needed; of the 20 desks a quarter is kept free, which leaves 15.
     const p = office([team('alpha', 10, ['tue']), team('beta', 6, ['tue'])], { reserve: 0.25 })
-    const fixes = fixesFor(p, 'day-uses-reserve|tue|-|-|alpha+beta')
+    const fixes = fixesFor(p, 'day-uses-reserve|tue|-|-|-')
     expect(fixes.map((fix) => fix.label)).toEqual(['Move Beta to Monday', 'Move Alpha to Monday'])
   })
 
@@ -461,7 +472,7 @@ describe('day-over-capacity, day-needs-overflow and day-uses-reserve', () => {
     // 30 seats needed on 20 desks.
     const sizes: [string, number][] = [['three', 3], ['six', 6], ['twelve', 12], ['nine', 9]]
     const p = office(sizes.map(([id, size]) => team(id, size, ['tue'])))
-    const fixes = fixesFor(p, 'day-over-capacity|tue|-|-|three+six+twelve+nine')
+    const fixes = fixesFor(p, 'day-over-capacity|tue|-|-|-')
     expect(fixes.map((fix) => fix.label)).toEqual([
       'Move Twelve to Monday',
       'Move Nine to Monday',
@@ -469,13 +480,13 @@ describe('day-over-capacity, day-needs-overflow and day-uses-reserve', () => {
     ])
     const moveNine = labelled(fixes, 'Move Nine to Monday')
     // Without the nine, Tuesday needs 21 seats: still one too many, and a step closer.
-    expect(idsAfter(p, moveNine)).toContain('day-over-capacity|tue|-|-|three+six+twelve')
+    expect(idsAfter(p, moveNine)).toContain('day-over-capacity|tue|-|-|-')
     expect(dayLoad(apply(p, moveNine), 'tue').needed).toBe(21)
   })
 
   it('offers three moves at most', () => {
     const p = office(['a', 'b', 'c', 'd', 'e'].map((id) => team(id, 5, ['tue'])))
-    const fixes = fixesFor(p, 'day-over-capacity|tue|-|-|a+b+c+d+e')
+    const fixes = fixesFor(p, 'day-over-capacity|tue|-|-|-')
     expect(fixes.map((fix) => fix.label)).toEqual(['Move A to Monday', 'Move B to Monday', 'Move C to Monday'])
   })
 
@@ -492,7 +503,7 @@ describe('day-over-capacity, day-needs-overflow and day-uses-reserve', () => {
       'two>wed',
       'three>wed',
     ])
-    const fixes = fixesFor(p, 'day-over-capacity|tue|-|-|one+two+three+four+five')
+    const fixes = fixesFor(p, 'day-over-capacity|tue|-|-|-')
     expect(fixes.map((fix) => fix.label)).toEqual(['Move Two to Wednesday', 'Move Three to Wednesday'])
   })
 
@@ -500,7 +511,7 @@ describe('day-over-capacity, day-needs-overflow and day-uses-reserve', () => {
     const fillers = WEEKDAYS.filter((day) => day !== 'tue').map((day) => team(`filler-${day}`, 15, [day]))
     const p = office([team('alpha', 6, ['tue']), team('beta', 16, ['tue']), ...fillers])
     // 15 + 6 and 15 + 16 are both more than 20 desks, on every other day.
-    expect(fixesFor(p, 'day-over-capacity|tue|-|-|alpha+beta')).toEqual([])
+    expect(fixesFor(p, 'day-over-capacity|tue|-|-|-')).toEqual([])
   })
 
   it('offers nothing when no team can come on another day', () => {
@@ -508,7 +519,7 @@ describe('day-over-capacity, day-needs-overflow and day-uses-reserve', () => {
       saying(team('alpha', 12, ['tue']), NOWHERE_ELSE),
       saying(team('beta', 10, ['tue']), NOWHERE_ELSE),
     ])
-    expect(fixesFor(p, 'day-over-capacity|tue|-|-|alpha+beta')).toEqual([])
+    expect(fixesFor(p, 'day-over-capacity|tue|-|-|-')).toEqual([])
   })
 
   it('does not move a team onto seats that are taken on the other day', () => {
@@ -520,13 +531,13 @@ describe('day-over-capacity, day-needs-overflow and day-uses-reserve', () => {
         holder('gamma', ['wed'], wednesday),
       ])
     const free = plan({ a: 4 })
-    expect(fixesFor(free, 'day-over-capacity|tue|-|-|alpha+beta').map((fix) => fix.label)).toEqual([
+    expect(fixesFor(free, 'day-over-capacity|tue|-|-|-').map((fix) => fix.label)).toEqual([
       'Move Beta to Wednesday',
     ])
     // Gamma sits in D on Wednesday: Beta would bring its seats along and overfill D.
     const taken = plan({ d: 4 })
     expect(suggestDayMoves(taken, 'tue', 3).map((move) => `${move.teamId}>${move.to}`)).toEqual(['beta>wed'])
-    expect(fixesFor(taken, 'day-over-capacity|tue|-|-|alpha+beta')).toEqual([])
+    expect(fixesFor(taken, 'day-over-capacity|tue|-|-|-')).toEqual([])
   })
 })
 
@@ -552,7 +563,7 @@ describe('team-unseated and team-short', () => {
 
   it('completes a team that is short and keeps the seats it holds', () => {
     const p = project([floor4()], [claims(9, ['tue'], { ne3: 4, ne4: 3 })])
-    const fix = only(fixesFor(p, 'team-short|tue|4|-|claims'))
+    const fix = only(fixesFor(p, 'team-short|tue|-|-|claims'))
     expect(fix).toEqual(seatingFix(p, 'claims', 'Seat automatically', { restart: false }))
     const seating = teamOf(apply(p, fix), 'claims').seating
     expect(seating).toMatchObject({ ne3: 4, ne4: 4 })
@@ -562,7 +573,7 @@ describe('team-unseated and team-short', () => {
 
   it('offers two ways out of a short day exception: back to the normal seats, or complete it', () => {
     const p = project([floor4()], [claims(4, ['tue', 'thu'], { ne1: 4 }, { daySeating: { thu: { ne3: 2 } } })])
-    const [normal, complete, ...more] = fixesFor(p, 'team-short|thu|4|-|claims')
+    const [normal, complete, ...more] = fixesFor(p, 'team-short|thu|-|-|claims')
     if (!normal || !complete) throw new Error('expected two fixes')
     expect(more).toEqual([])
     // The normal seats are free on Thursday, so the exception can simply go.
@@ -572,13 +583,13 @@ describe('team-unseated and team-short', () => {
     // Or the exception is completed, for that day only.
     expect(complete.label).toBe('Seat automatically')
     expect(teamOf(apply(p, complete), 'claims')).toMatchObject({ seating: { ne1: 4 }, daySeating: { thu: { ne3: 4 } } })
-    expect(idsAfter(p, complete)).toEqual(['seat-differs|thu|4|-|claims'])
+    expect(idsAfter(p, complete)).toEqual(['seat-differs|thu|-|-|claims'])
   })
 
   it('moves seats out of a room on the way', () => {
     const p = project([floor4()], [claims(4, ['tue'], { ne1: 3, room: 1 })])
-    expect(ids(findIssues(p))).toEqual(['seats-in-room|tue|4|room|claims', 'team-short|tue|4|-|claims'])
-    const fix = only(fixesFor(p, 'team-short|tue|4|-|claims'))
+    expect(ids(findIssues(p))).toEqual(['seats-in-room|tue|-|room|claims', 'team-short|tue|-|-|claims'])
+    const fix = only(fixesFor(p, 'team-short|tue|-|-|claims'))
     expect(teamOf(apply(p, fix), 'claims').seating).toEqual({ ne1: 4 })
     expect(idsAfter(p, fix)).toEqual([])
   })
@@ -599,7 +610,7 @@ describe('team-unseated and team-short', () => {
     const unseated = project([floor4()], [claims(9, ['tue']), tuesday])
     expect(fixesFor(unseated, 'team-unseated|tue|-|-|claims')).toEqual([])
     const short = project([floor4()], [claims(9, ['tue'], { ne4: 4 }), tuesday])
-    expect(fixesFor(short, 'team-short|tue|4|-|claims')).toEqual([])
+    expect(fixesFor(short, 'team-short|tue|-|-|claims')).toEqual([])
   })
 
   it('keeps to the desks: overflow seats are for the planner to hand out', () => {
@@ -617,7 +628,7 @@ describe('team-unseated and team-short', () => {
 describe('team-split-floors and team-scattered', () => {
   it('offers to reseat a team that is split over floors in one place', () => {
     const p = project([floor3(), floor4()], [claims(9, ['tue'], { sw1: 4, sw2: 1, ne1: 4 })])
-    const fix = only(fixesFor(p, 'team-split-floors|tue|3|-|claims'))
+    const fix = only(fixesFor(p, 'team-split-floors|tue|-|-|claims'))
     expect(fix).toEqual(seatingFix(p, 'claims', 'Reseat in one place', { restart: true }))
     expect(fix.id).toBe('seat/replace|claims')
     // All nine seats on a single floor.
@@ -639,7 +650,7 @@ describe('team-split-floors and team-scattered', () => {
       [floor3(), floor4()],
       [claims(14, ['tue'], { sw1: 4, sw2: 4, sw3: 4, ne1: 2 }), holder('other', ['tue'], { ne4: 4 })],
     )
-    expect(fixesFor(p, 'team-split-floors|tue|3|-|claims')).toEqual([])
+    expect(fixesFor(p, 'team-split-floors|tue|-|-|claims')).toEqual([])
   })
 
   it('offers nothing when the only free areas of the floor are apart', () => {
@@ -681,7 +692,7 @@ describe('team-split-floors and team-scattered', () => {
     )
     // Automatic seating would take that floor: it puts one floor before one place.
     expect(teamOf(reseated(p, 'claims'), 'claims').seating).toEqual({ sw1: 4, sw3: 4 })
-    expect(fixesFor(p, 'team-split-floors|tue|3|-|claims')).toEqual([])
+    expect(fixesFor(p, 'team-split-floors|tue|-|-|claims')).toEqual([])
   })
 
   it('does not take away the seats the team holds on another day', () => {
@@ -695,14 +706,14 @@ describe('team-split-floors and team-scattered', () => {
     const proposed = reseated(p, 'claims')
     expect(seatedOn(proposed, 'claims', 'tue')).toMatchObject({ seated: 8, floorIds: [expect.any(String)] })
     expect(seatedOn(proposed, 'claims', 'thu').seated).toBe(0)
-    expect(fixesFor(p, 'team-split-floors|tue|3|-|claims')).toEqual([])
+    expect(fixesFor(p, 'team-split-floors|tue|-|-|claims')).toEqual([])
   })
 })
 
 describe('off-home-floor', () => {
   it('offers to reseat the team on the floor it prefers', () => {
     const p = project([floor3(), floor4()], [claims(4, ['tue'], { ne1: 4 }, { homeFloorId: '3' })])
-    const fix = only(fixesFor(p, 'off-home-floor|tue|4|-|claims'))
+    const fix = only(fixesFor(p, 'off-home-floor|tue|-|-|claims'))
     expect(fix).toEqual(seatingFix(p, 'claims', 'Reseat on Floor 3', { restart: true }))
     expect(fix.id).toBe('seat/replace|claims')
     expect(seatedOn(apply(p, fix), 'claims', 'tue')).toMatchObject({ seated: 4, floorIds: ['3'] })
@@ -712,7 +723,7 @@ describe('off-home-floor', () => {
   it('names the floor as the planner named it', () => {
     const ground = floor('g', deskRow('gr', 2, 4), { name: 'Ground floor' })
     const p = project([ground, floor4()], [claims(4, ['tue'], { ne1: 4 }, { homeFloorId: 'g' })])
-    expect(only(fixesFor(p, 'off-home-floor|tue|4|-|claims')).label).toBe('Reseat on Ground floor')
+    expect(only(fixesFor(p, 'off-home-floor|tue|-|-|claims')).label).toBe('Reseat on Ground floor')
   })
 
   it('offers nothing when the preferred floor has no room for the team', () => {
@@ -720,7 +731,7 @@ describe('off-home-floor', () => {
       [floor3(), floor4()],
       [claims(4, ['tue'], { ne1: 4 }, { homeFloorId: '3' }), holder('other', ['tue'], { sw1: 4, sw2: 4, sw3: 3 })],
     )
-    expect(fixesFor(p, 'off-home-floor|tue|4|-|claims')).toEqual([])
+    expect(fixesFor(p, 'off-home-floor|tue|-|-|claims')).toEqual([])
   })
 
   it('offers nothing when the team would only move to another floor that is not its own', () => {
@@ -731,14 +742,14 @@ describe('off-home-floor', () => {
     )
     // Automatic seating would take the team down to floor 2: the lowest floor with room.
     expect(teamOf(reseated(p, 'claims'), 'claims').seating).toEqual({ gr1: 4 })
-    expect(fixesFor(p, 'off-home-floor|tue|4|-|claims')).toEqual([])
+    expect(fixesFor(p, 'off-home-floor|tue|-|-|claims')).toEqual([])
   })
 })
 
 describe('overflow-used', () => {
   it('offers to move the team to desks', () => {
     const p = project([floor4()], [claims(7, ['tue'], { ne1: 4, bench: 3 })])
-    const fix = only(fixesFor(p, 'overflow-used|tue|4|bench|claims'))
+    const fix = only(fixesFor(p, 'overflow-used|tue|-|-|claims'))
     expect(fix).toEqual(seatingFix(p, 'claims', 'Move to desks', { restart: true }))
     expect(fix.id).toBe('seat/replace|claims')
     expect(seatedOn(apply(p, fix), 'claims', 'tue')).toMatchObject({ inDesks: 7, inOverflow: 0 })
@@ -752,14 +763,14 @@ describe('overflow-used', () => {
     )
     // Seating the team from scratch would find it no place at all and take its seats away.
     expect(teamOf(reseated(p, 'claims'), 'claims').seating).toEqual({})
-    expect(fixesFor(p, 'overflow-used|tue|4|bench|claims')).toEqual([])
+    expect(fixesFor(p, 'overflow-used|tue|-|-|claims')).toEqual([])
   })
 })
 
 describe('team-over-seated', () => {
   it('offers to release the seats the team does not need', () => {
     const p = project([floor4()], [claims(9, ['tue'], { ne1: 4, ne2: 4, ne3: 3 })])
-    const fix = only(fixesFor(p, 'team-over-seated|tue|4|-|claims'))
+    const fix = only(fixesFor(p, 'team-over-seated|tue|-|-|claims'))
     expect(fix).toEqual({
       id: 'batch|claims|all',
       label: 'Release 2 seats',
@@ -775,13 +786,13 @@ describe('team-over-seated', () => {
 
   it('writes one seat in the singular', () => {
     const p = project([floor4()], [claims(9, ['tue'], { ne1: 4, ne2: 4, ne3: 2 })])
-    expect(only(fixesFor(p, 'team-over-seated|tue|4|-|claims')).label).toBe('Release 1 seat')
+    expect(only(fixesFor(p, 'team-over-seated|tue|-|-|claims')).label).toBe('Release 1 seat')
   })
 
   it('starts with the last area of the highest floor and goes back from there', () => {
     // Five seats too many: both areas on floor 4 go, and one seat of SW 2.
     const p = project([floor3(), floor4()], [claims(6, ['tue'], { sw1: 4, sw2: 3, ne1: 2, ne3: 2 })])
-    const fix = only(fixesFor(p, 'team-over-seated|tue|3|-|claims'))
+    const fix = only(fixesFor(p, 'team-over-seated|tue|-|-|claims'))
     expect(fix.label).toBe('Release 5 seats')
     expect(fix.action).toEqual({
       type: 'batch',
@@ -798,7 +809,7 @@ describe('team-over-seated', () => {
 
   it('releases them for one day when the team has an exception on that day', () => {
     const p = project([floor4()], [claims(4, ['tue', 'thu'], { ne1: 4 }, { daySeating: { tue: { ne1: 4, ne2: 2 } } })])
-    const fix = only(fixesFor(p, 'team-over-seated|tue|4|-|claims'))
+    const fix = only(fixesFor(p, 'team-over-seated|tue|-|-|claims'))
     expect(fix.id).toBe('batch|claims|tue')
     expect(fix.action).toEqual({
       type: 'batch',
@@ -812,15 +823,15 @@ describe('team-over-seated', () => {
   it('leaves seats in a room to the fix for the room', () => {
     // The room comes last on the floor, but its seats do not count as seats.
     const p = project([floor4()], [claims(4, ['tue'], { ne1: 4, ne2: 1, room: 2 })])
-    const fix = only(fixesFor(p, 'team-over-seated|tue|4|-|claims'))
+    const fix = only(fixesFor(p, 'team-over-seated|tue|-|-|claims'))
     expect(fix.label).toBe('Release 1 seat')
     expect(teamOf(apply(p, fix), 'claims').seating).toEqual({ ne1: 4, room: 2 })
-    expect(idsAfter(p, fix)).toEqual(['seats-in-room|tue|4|room|claims'])
+    expect(idsAfter(p, fix)).toEqual(['seats-in-room|tue|-|room|claims'])
   })
 
   it('releases every seat of a team without people', () => {
     const p = project([floor4()], [team('new', 0, ['tue'], { ne1: 2, bench: 1 }, { name: 'New team' })])
-    const fix = only(fixesFor(p, 'team-over-seated|tue|4|-|new'))
+    const fix = only(fixesFor(p, 'team-over-seated|tue|-|-|new'))
     expect(fix.label).toBe('Release 3 seats')
     expect(teamOf(apply(p, fix), 'new').seating).toEqual({})
     expect(idsAfter(p, fix)).toEqual([])
@@ -834,7 +845,7 @@ describe('team-over-seated', () => {
 describe('seat-differs', () => {
   it('offers to use the normal seating on that day', () => {
     const p = project([floor4()], [claims(4, ['tue', 'thu'], { ne1: 4 }, { daySeating: { tue: { ne2: 4 } } })])
-    const fix = only(fixesFor(p, 'seat-differs|tue|4|-|claims'))
+    const fix = only(fixesFor(p, 'seat-differs|tue|-|-|claims'))
     expect(fix).toEqual({
       id: 'seat/resetDay|claims|tue',
       label: 'Use the normal seating on Tuesday',
@@ -863,16 +874,16 @@ describe('seat-differs', () => {
       [floor4()],
       [claims(4, ['tue', 'thu'], { ne1: 4 }, { daySeating: { tue: { ne2: 4 } } }), under(4, ['tue'], { ne1: 4 })],
     )
-    expect(fixesFor(p, 'seat-differs|tue|4|-|claims')).toEqual([])
+    expect(fixesFor(p, 'seat-differs|tue|-|-|claims')).toEqual([])
   })
 
   it('offers nothing when the team would have fewer seats without the exception', () => {
     // Seated for Tuesday only; the other days have no seats yet.
     const unseated = project([floor4()], [claims(4, ['tue', 'thu'], {}, { daySeating: { tue: { ne1: 4 } } })])
-    expect(fixesFor(unseated, 'seat-differs|tue|4|-|claims')).toEqual([])
+    expect(fixesFor(unseated, 'seat-differs|tue|-|-|claims')).toEqual([])
     // Complete on Tuesday, two seats short on the other days.
     const short = project([floor4()], [claims(4, ['tue', 'thu'], { ne1: 2 }, { daySeating: { tue: { ne2: 4 } } })])
-    expect(fixesFor(short, 'seat-differs|tue|4|-|claims')).toEqual([])
+    expect(fixesFor(short, 'seat-differs|tue|-|-|claims')).toEqual([])
   })
 })
 
@@ -906,7 +917,7 @@ describe('wish-unmet', () => {
       { reserve: 0.25 },
     )
     const fix = only(fixesFor(p, 'wish-unmet|tue|-|-|claims'))
-    expect(idsAfter(p, fix)).toContain('day-uses-reserve|tue|-|-|claims+other')
+    expect(idsAfter(p, fix)).toContain('day-uses-reserve|tue|-|-|-')
   })
 
   it('offers nothing when the day would then need more seats than the building has desks', () => {
@@ -934,13 +945,13 @@ describe('wish-unmet', () => {
         team('policy', 3, ['tue'], { ne1: 3 }, { name: 'Policy Admin' }),
       ],
     )
-    expect(ids(findIssues(p))).toContain('area-over-capacity|tue|4|ne1|under+policy')
+    expect(ids(findIssues(p))).toContain('area-over-capacity|tue|-|ne1|-')
     expect(fixesFor(p, 'wish-unmet|tue|-|-|claims')).toEqual([])
   })
 
   it('offers nothing when the team would bring seats in a room along', () => {
     const p = project([floor4()], [claims(4, ['thu'], { ne1: 3, room: 1 }, { wishes: wanting })])
-    expect(ids(findIssues(p))).toContain('seats-in-room|thu|4|room|claims')
+    expect(ids(findIssues(p))).toContain('seats-in-room|thu|-|room|claims')
     expect(fixesFor(p, 'wish-unmet|tue|-|-|claims')).toEqual([])
   })
 })
@@ -951,7 +962,7 @@ describe('unwanted-day', () => {
       [floor4()],
       [claims(4, ['tue', 'fri'], { ne1: 4 }, { wishes: wishes({ tue: 'want', fri: 'cannot' }) })],
     )
-    const fix = only(fixesFor(p, 'unwanted-day|fri|4|-|claims'))
+    const fix = only(fixesFor(p, 'unwanted-day|fri|-|-|claims'))
     expect(fix).toEqual({
       id: 'team/setPlanned|claims|fri',
       label: 'Take Friday off the plan',
@@ -973,14 +984,14 @@ describe('unwanted-day', () => {
         team('policy', 3, ['fri'], { ne1: 3 }, { name: 'Policy Admin' }),
       ],
     )
-    expect(ids(findIssues(p))).toContain('area-over-capacity|fri|4|ne1|claims+under+policy')
-    const fix = only(fixesFor(p, 'unwanted-day|fri|4|-|claims'))
-    expect(idsAfter(p, fix)).toEqual(['area-over-capacity|fri|4|ne1|under+policy'])
+    expect(ids(findIssues(p))).toContain('area-over-capacity|fri|-|ne1|-')
+    const fix = only(fixesFor(p, 'unwanted-day|fri|-|-|claims'))
+    expect(idsAfter(p, fix)).toEqual(['area-over-capacity|fri|-|ne1|-'])
   })
 
   it('is offered for the last team day as well: the note that follows says what is left to do', () => {
     const p = project([floor4()], [claims(4, ['fri'], { ne1: 4 }, { wishes: wishes({ fri: 'cannot' }) })])
-    const fix = only(fixesFor(p, 'unwanted-day|fri|4|-|claims'))
+    const fix = only(fixesFor(p, 'unwanted-day|fri|-|-|claims'))
     expect(idsAfter(p, fix)).toEqual(['no-team-days|-|-|-|claims'])
   })
 })
@@ -1000,13 +1011,14 @@ describe('no-team-days', () => {
 
 describe('suggestFixes in general', () => {
   const crowded = () => project([floor4()], [claims(4, ['tue', 'thu'], { ne1: 4 }), under(2, ['tue'], { ne1: 2 })])
-  const crowdedId = 'area-over-capacity|tue|4|ne1|claims+under'
+  const crowdedId = 'area-over-capacity|tue|-|ne1|-'
 
   it('has nothing for an issue the project does not have', () => {
     const p = crowded()
     const elsewhere = issueOf(project([floor4()], [claims(9, ['mon'])]), 'team-unseated|mon|-|-|claims')
     expect(suggestFixes(p, elsewhere)).toEqual([])
-    expect(suggestFixes(p, { ...issueOf(p, crowdedId), id: 'area-over-capacity|tue|4|ne1|claims' })).toEqual([])
+    // The same conflict claimed for an area that is not over capacity.
+    expect(suggestFixes(p, { ...issueOf(p, crowdedId), id: 'area-over-capacity|tue|-|ne2|-', areaId: 'ne2' })).toEqual([])
     expect(suggestFixes(project([]), issueOf(p, crowdedId))).toEqual([])
   })
 
@@ -1040,18 +1052,18 @@ describe('suggestFixes in general', () => {
       team(id, 2, days, seating, { name: '  ', ...options })
 
     const inRoom = project([floor4()], [nameless('new', ['tue'], { ne1: 2, room: 1 })])
-    expect(only(fixesFor(inRoom, 'seats-in-room|tue|4|room|new')).explanation).toBe(
+    expect(only(fixesFor(inRoom, 'seats-in-room|tue|-|room|new')).explanation).toBe(
       "Takes this team's 1 seat out of Meeting room 4.1",
     )
 
     const crowd = project([floor4()], [nameless('new', ['tue'], { ne1: 2 }), claims(4, ['tue'], { ne1: 4 })])
-    expect(fixesFor(crowd, 'area-over-capacity|tue|4|ne1|new+claims').map((fix) => fix.label)).toEqual([
+    expect(fixesFor(crowd, 'area-over-capacity|tue|-|ne1|-').map((fix) => fix.label)).toEqual([
       'Reseat this team',
       'Reseat Claims Intake',
     ])
 
     const full = office([nameless('new', ['tue'], {}), team('rest', 20, ['tue'])])
-    expect(fixesFor(full, 'day-over-capacity|tue|-|-|new+rest').map((fix) => fix.label)).toContain(
+    expect(fixesFor(full, 'day-over-capacity|tue|-|-|-').map((fix) => fix.label)).toContain(
       'Move this team to Monday',
     )
 
@@ -1060,7 +1072,7 @@ describe('suggestFixes in general', () => {
     expect(only(fixesFor(days, 'wish-unmet|wed|-|-|new')).explanation).toBe(
       'Adds Wednesday as a team day for this team',
     )
-    expect(only(fixesFor(days, 'unwanted-day|fri|4|-|new')).explanation).toBe('The team said it cannot come on Friday')
+    expect(only(fixesFor(days, 'unwanted-day|fri|-|-|new')).explanation).toBe('The team said it cannot come on Friday')
   })
 })
 
@@ -1128,27 +1140,27 @@ describe('a larger mixed project', () => {
     const offered = issues.map((issue) => [issue.id, fixesFor(p, issue.id).map((fix) => fix.label)])
     expect(offered).toEqual([
       // Conflicts. The crowd of 32 fits on no day; Legal moving away is at least a step.
-      ['day-over-capacity|mon|-|-|legal+crowd1', ['Move Legal to Thursday']],
-      ['area-over-capacity|tue|4|ne1|claims+under', ['Reseat Underwriting', 'Reseat Claims Intake']],
-      ['seats-in-room|tue|4|room|data', ['Remove these seats']],
+      ['day-over-capacity|mon|-|-|-', ['Move Legal to Thursday']],
+      ['area-over-capacity|tue|-|ne1|-', ['Reseat Underwriting', 'Reseat Claims Intake']],
+      ['seats-in-room|tue|-|room|data', ['Remove these seats']],
       // To-dos. The crowds of Monday and Wednesday are larger than the building has desks.
       ['team-unseated|mon|-|-|crowd1', []],
-      ['team-short|tue|4|-|policy', ['Seat automatically']],
+      ['team-short|tue|-|-|policy', ['Seat automatically']],
       ['team-unseated|tue|-|-|data', ['Seat automatically']],
       ['team-unseated|wed|-|-|crowd2', []],
       ['team-unseated|fri|-|-|crowd3', ['Seat automatically']],
       // Warnings. Wednesday is too full for Legal's wish, and its crowd fits nowhere else.
-      ['overflow-used|tue|4|bench|portal', ['Move to desks']],
+      ['overflow-used|tue|-|-|portal', ['Move to desks']],
       ['wish-unmet|wed|-|-|legal', []],
-      ['day-needs-overflow|wed|-|-|crowd2', []],
-      ['team-split-floors|thu|3|-|finance', ['Reseat in one place']],
-      ['unwanted-day|fri|3|-|arch', ['Take Friday off the plan']],
-      ['day-uses-reserve|fri|-|-|arch+crowd3', ['Move Architecture to Thursday']],
+      ['day-needs-overflow|wed|-|-|-', []],
+      ['team-split-floors|thu|-|-|finance', ['Reseat in one place']],
+      ['unwanted-day|fri|-|-|arch', ['Take Friday off the plan']],
+      ['day-uses-reserve|fri|-|-|-', ['Move Architecture to Thursday']],
       // Notes. Floor 4 has no room for all of Finance on Thursday, and the seats Claims
       // Intake has on its other day are taken then.
-      ['off-home-floor|thu|3|-|finance', []],
-      ['seat-differs|thu|4|-|claims', []],
-      ['team-over-seated|thu|4|-|broker', ['Release 1 seat']],
+      ['off-home-floor|thu|-|-|finance', []],
+      ['seat-differs|thu|-|-|claims', []],
+      ['team-over-seated|thu|-|-|broker', ['Release 1 seat']],
       ['team-scattered|thu|4|-|risk', ['Reseat in one place']],
       ['no-team-days|-|-|-|newbies', []],
     ])
@@ -1228,13 +1240,16 @@ describe('random offices', () => {
       for (const day of WEEKDAYS) said[day] = someWish(days.includes(day))
       const homeFloor = chance(0.3) ? floors[upTo(floors.length - 1)] : undefined
       teams.push(
-        team(`t${t}`, upTo(10), days, seating, {
-          daySeating,
-          wishes: said,
-          group: chance(0.5) ? `group ${upTo(1)}` : '',
-          homeFloorId: homeFloor?.id ?? null,
-          attendance: chance(0.2) ? 0.6 : null,
-        }),
+        // As the reducer would leave it: never a seating of its own on every team day.
+        settleSeating(
+          team(`t${t}`, upTo(10), days, seating, {
+            daySeating,
+            wishes: said,
+            domainId: chance(0.5) ? `domain-${upTo(1)}` : null,
+            homeFloorId: homeFloor?.id ?? null,
+            attendance: chance(0.2) ? 0.6 : null,
+          }),
+        ),
       )
     }
     return project(floors, teams, { reserve: chance(0.5) ? 0.2 : 0 })
@@ -1250,8 +1265,11 @@ describe('random offices', () => {
         const fixes = fixesFor(p, issue.id, where)
         const seen = fixes.length > 0 ? rulesWithFix : rulesWithout
         seen.add(issue.rule)
-        // Once applied, the fix has nothing more to offer for the issue it solved.
-        for (const fix of fixes) expect(suggestFixes(apply(p, fix), issue), where).toEqual([])
+        // Once applied, the fix has nothing more to offer for the issue it solved. (A day
+        // that is still too full keeps its issue, and with it further moves.)
+        if (!DAY_RULES.includes(issue.rule)) {
+          for (const fix of fixes) expect(suggestFixes(apply(p, fix), issue), where).toEqual([])
+        }
       }
     }
     // The offices are varied enough to show every rule with a fix, and every rule that can
@@ -1260,5 +1278,55 @@ describe('random offices', () => {
     const alwaysFixable: IssueRule[] = ['seats-in-room', 'team-over-seated', 'unwanted-day']
     expect([...rulesWithFix].sort()).toEqual(allRules.filter((rule) => rule !== 'no-team-days').sort())
     expect([...rulesWithout].sort()).toEqual(allRules.filter((rule) => !alwaysFixable.includes(rule)).sort())
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Found in review
+// ---------------------------------------------------------------------------
+
+describe('a team that moves to another day keeps its seats', () => {
+  // Three areas of four desks; a quarter of the desks is kept free, so nine may be planned.
+  const building = () => floor('1', row(['a', 'b', 'c'], 4))
+  const filler = (id: string, days: readonly Weekday[], seating: Seating) =>
+    team(id, Object.values(seating).reduce((sum, seats) => sum + seats, 0), days, seating)
+
+  it('arrives on the new day with the seats it had, also when those were a seating for that day only', () => {
+    // Monday is full, so Alpha has no seats then and sits in C on Tuesday only.
+    const alpha = team('alpha', 4, ['mon', 'tue'], {}, { daySeating: { tue: { c: 4 } } })
+    const p = project(
+      [building()],
+      [
+        filler('m1', ['mon'], { a: 4 }),
+        filler('m2', ['mon'], { b: 4 }),
+        filler('m3', ['mon'], { c: 4 }),
+        filler('t1', ['tue'], { a: 4 }),
+        filler('t2', ['tue'], { b: 2 }),
+        alpha,
+      ],
+      { reserve: 0.25 },
+    )
+    expect(violations(p)).toEqual([])
+    const move = labelled(fixesFor(p, 'day-uses-reserve|tue|-|-|-'), 'Move Alpha to Wednesday')
+    const moved = apply(p, move)
+    expect(teamOf(moved, 'alpha').days).toEqual(['mon', 'wed'])
+    // Four of four on Wednesday, in C, where it sat on Tuesday.
+    expect(seatedOn(moved, 'alpha', 'wed')).toMatchObject({ seated: 4, needed: 4, areaIds: ['c'] })
+  })
+})
+
+describe('"Use the normal seating" for a day without seats', () => {
+  it('is not offered when the normal seating is short itself', () => {
+    // A has two desks; B has four and is taken on both days. Alpha needs four.
+    const p = project(
+      [floor('1', [...row(['a'], 2), ...row(['b'], 4, 0.5)])],
+      [
+        team('alpha', 4, ['mon', 'tue'], { a: 2 }, { daySeating: { tue: {} } }),
+        team('other', 4, ['mon', 'tue'], { b: 4 }),
+      ],
+    )
+    expect(violations(p)).toEqual([])
+    // Going back to the normal seating would leave Alpha two seats short on Tuesday.
+    expect(fixesFor(p, 'team-unseated|tue|-|-|alpha').map((fix) => fix.label)).toEqual([])
   })
 })

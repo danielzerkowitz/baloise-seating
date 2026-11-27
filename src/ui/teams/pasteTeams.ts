@@ -1,5 +1,6 @@
 import type { ParsedTeamRow } from '../../domain/files'
 import { makeTeam } from '../../domain/model'
+import { orgDraft, placeByNames, type OrgDraft } from '../../domain/org'
 import { reduce, type Action } from '../../domain/reducer'
 import { WEEKDAYS, type Id, type Project, type Team } from '../../domain/types'
 import { plural } from '../format'
@@ -31,13 +32,14 @@ function nameKey(name: string): string {
   return name.trim().toLowerCase()
 }
 
-/** The edits that turn a team into what the row says: the row's size, its group when it has
- *  one, and when it has days, exactly those days as the wanted ones. Edits that turn out to
- *  change nothing are dropped by the caller. */
-function editsFor(team: Team, row: ParsedTeamRow): Action[] {
-  const group = row.group.trim()
+type Place = { domainId: Id | null; artId: Id | null }
+
+/** The edits that turn a team into what the row says: the row's size, its domain and ART
+ *  when it names them, and when it has days, exactly those days as the wanted ones. Edits
+ *  that turn out to change nothing are dropped by the caller. */
+function editsFor(team: Team, row: ParsedTeamRow, place: Place | null): Action[] {
   const edits: Action[] = [
-    { type: 'team/update', id: team.id, patch: group === '' ? { size: row.size } : { size: row.size, group } },
+    { type: 'team/update', id: team.id, patch: place ? { size: row.size, ...place } : { size: row.size } },
   ]
   if (row.days.length === 0) return edits
   for (const day of WEEKDAYS) {
@@ -61,11 +63,26 @@ export function planPaste(project: Project, rows: readonly ParsedTeamRow[], upda
   // The plan as it will be after the rows so far. A new team gets a colour and a code that
   // the new teams before it did not take.
   let draft = project
+  const org = orgDraft(project)
+
+  /** Where the row puts its team, making the domains and ARTs it names that are not there
+   *  yet; null when it names neither. */
+  const placeOf = (row: ParsedTeamRow, organisation: OrgDraft): Place | null => {
+    if (row.domain.trim() === '' && row.art.trim() === '') return null
+    const madeBefore = organisation.added.length
+    const place = placeByNames(organisation, row.domain, row.art)
+    for (const action of organisation.added.slice(madeBefore)) {
+      actions.push(action)
+      draft = reduce(draft, action)
+    }
+    return place
+  }
 
   for (const row of rows) {
     const match = draft.teams.find((team) => nameKey(team.name) === nameKey(row.name))
     if (!match) {
-      const team = makeTeam(draft, { name: row.name.trim(), size: row.size, days: row.days, group: row.group.trim() })
+      const place = placeOf(row, org)
+      const team = makeTeam(draft, { name: row.name.trim(), size: row.size, days: row.days, ...place })
       const action: Action = { type: 'team/add', team }
       actions.push(action)
       draft = reduce(draft, action)
@@ -78,7 +95,7 @@ export function planPaste(project: Project, rows: readonly ParsedTeamRow[], upda
       continue
     }
     const before = draft
-    for (const edit of editsFor(match, row)) {
+    for (const edit of editsFor(match, row, placeOf(row, org))) {
       const next = reduce(draft, edit)
       if (next === draft) continue
       actions.push(edit)

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { worstSeverity, type Issue } from '../../domain/conflicts'
 import { WEEKDAY_NAME, type Id, type Project, type Weekday } from '../../domain/types'
+import { orgLabel } from '../../domain/model'
 import { exampleTeams } from '../../state/seed'
 import { dispatch, getProject } from '../../state/store'
 import { setUi } from '../../state/ui'
@@ -13,13 +14,17 @@ import { focusFirstTeamRow, teamRowId } from './actions'
 import { TeamDetail } from './TeamDetail'
 import { anyTeamNeedsSeats, trayLists, type TrayEntry } from './trayLists'
 
+const ORG_SEPARATOR = ' · '
+
 /** Lights a team's seats up on the plan (true) or stops doing so (false). */
 type Emphasize = (teamId: Id, on: boolean) => void
 
-function rowLabel(entry: TrayEntry, conflict: boolean): string {
+function rowLabel(entry: TrayEntry, org: string, conflict: boolean): string {
+  // Read out with commas, not the dot that separates them on screen.
+  org = org.replaceAll(ORG_SEPARATOR, ', ')
   const { team, status } = entry
   const parts = [team.name]
-  if (team.group) parts.push(team.group)
+  if (org) parts.push(org)
   if (status.planned) parts.push(`${status.seated} of ${plural(status.needed, 'seat')}`)
   else parts.push(team.days.length > 0 ? `in on ${daysLong(team.days)}` : 'no team days')
   if (conflict) parts.push('has a conflict')
@@ -27,8 +32,8 @@ function rowLabel(entry: TrayEntry, conflict: boolean): string {
 }
 
 /** One team in the tray. Click it to seat the team, or drag it onto an area. */
-function TeamRow(props: { entry: TrayEntry; active: boolean; conflict: boolean; onEmphasis: Emphasize }) {
-  const { entry, active, conflict, onEmphasis } = props
+function TeamRow(props: { entry: TrayEntry; org: string; active: boolean; conflict: boolean; onEmphasis: Emphasize }) {
+  const { entry, org, active, conflict, onEmphasis } = props
   const { team, status } = entry
   const complete = status.state === 'seated' || status.state === 'over'
 
@@ -42,7 +47,7 @@ function TeamRow(props: { entry: TrayEntry; active: boolean; conflict: boolean; 
       type="button"
       className="plan-team"
       aria-pressed={active}
-      aria-label={rowLabel(entry, conflict)}
+      aria-label={rowLabel(entry, org, conflict)}
       draggable
       onClick={() => setUi({ activeTeamId: active ? null : team.id })}
       onDragStart={(e) => {
@@ -66,7 +71,7 @@ function TeamRow(props: { entry: TrayEntry; active: boolean; conflict: boolean; 
       </span>
       <span className="plan-team__text">
         <span className="plan-team__name truncate">{team.name}</span>
-        {team.group ? <span className="truncate faint small">{team.group}</span> : null}
+        {org ? <span className="truncate faint small">{org}</span> : null}
       </span>
       {status.planned ? (
         <span className="plan-team__count sign">
@@ -102,6 +107,7 @@ function TeamList(props: ListProps & { entries: readonly TrayEntry[] }) {
         <li key={entry.team.id}>
           <TeamRow
             entry={entry}
+            org={orgLabel(project, entry.team, ORG_SEPARATOR)}
             active={entry.team.id === activeTeamId}
             conflict={worstSeverity(issues, { day, teamId: entry.team.id }) === 'error'}
             onEmphasis={props.onEmphasis}
@@ -144,7 +150,7 @@ export function TeamTray(props: ListProps & { onSeatEveryone: () => void }) {
             onClick={() => {
               // Rendered at once, because this button is gone as soon as there are teams and
               // the focus should move on to the first of them.
-              flushSync(() => dispatch({ type: 'team/addMany', teams: exampleTeams(getProject()) }))
+              flushSync(() => dispatch(exampleTeams(getProject()).action))
               focusFirstTeamRow()
             }}
           >

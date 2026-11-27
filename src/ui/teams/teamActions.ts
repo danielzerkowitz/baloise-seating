@@ -43,14 +43,14 @@ export function removeAllTeams(): void {
 }
 
 export function addExampleTeams(): void {
-  const teams = exampleTeams(getProject())
-  if (!applied({ type: 'team/addMany', teams })) return
-  toast(`Added ${plural(teams.length, 'example team')}`, undoAction())
+  const { action, count } = exampleTeams(getProject())
+  if (!applied(action)) return
+  toast(`Added ${plural(count, 'example team')}`, undoAction())
 }
 
 const COPY_SUFFIX = ' copy'
 
-/** Adds a team with the same size, days and group, and what the original said about each
+/** Adds a team with the same size, days, domain and ART, and what the original said about each
  *  day. It starts without seats, and its name field takes the focus. */
 export function duplicateTeam(team: Team): void {
   const copy = makeTeam(getProject(), {
@@ -58,7 +58,8 @@ export function duplicateTeam(team: Team): void {
     name: `${team.name.slice(0, MAX_NAME_LENGTH - COPY_SUFFIX.length)}${COPY_SUFFIX}`.trim(),
     size: team.size,
     days: team.days,
-    group: team.group,
+    domainId: team.domainId,
+    artId: team.artId,
   })
   dispatch({ type: 'team/add', team: { ...copy, wishes: { ...team.wishes } } })
   setUi({ focusTeamId: copy.id })

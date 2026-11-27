@@ -932,17 +932,18 @@ describe('makeTeam', () => {
 
   it('starts unseated, with nothing filled in that was not given', () => {
     const made = makeTeam(plan(), { name: 'Claims Alpha', size: 9 })
-    expect(made).toMatchObject({ name: 'Claims Alpha', size: 9, group: '', attendance: null, homeFloorId: null, notes: '' })
+    expect(made).toMatchObject({ name: 'Claims Alpha', size: 9, domainId: null, artId: null, attendance: null, homeFloorId: null, notes: '' })
     expect(made.seating).toEqual({})
     expect(made.daySeating).toEqual({})
     expect(made.id).toMatch(/^team-/)
   })
 
   it('takes over what was given', () => {
-    const made = makeTeam(plan(), {
+    const withOrg = { ...plan(), domains: [{ id: 'nonlife', name: 'Non-Life' }], arts: [{ id: 'claims', name: 'Claims ART', domainId: 'nonlife' }] }
+    const made = makeTeam(withOrg, {
       name: 'Claims Alpha',
       size: 9,
-      group: 'Claims',
+      artId: 'claims',
       color: '#123456',
       code: 'ALFA',
       attendance: 0.8,
@@ -950,13 +951,21 @@ describe('makeTeam', () => {
       notes: 'Needs a wall for the board',
     })
     expect(made).toMatchObject({
-      group: 'Claims',
+      // The ART decides the domain.
+      domainId: 'nonlife',
+      artId: 'claims',
       color: '#123456',
       code: 'ALFA',
       attendance: 0.8,
       homeFloorId: '2',
       notes: 'Needs a wall for the board',
     })
+  })
+
+  it('puts a team only in a domain or on an ART that exists', () => {
+    const withOrg = { ...plan(), domains: [{ id: 'mgmt', name: 'Management' }], arts: [] }
+    expect(makeTeam(withOrg, { name: 'Board', size: 3, domainId: 'mgmt' })).toMatchObject({ domainId: 'mgmt', artId: null })
+    expect(makeTeam(withOrg, { name: 'Lost', size: 3, domainId: 'ghost', artId: 'ghost' })).toMatchObject({ domainId: null, artId: null })
   })
 
   it('picks a colour that is not in use yet', () => {
@@ -1231,7 +1240,16 @@ describe('clampRect', () => {
 describe('emptyProject', () => {
   it('is a sound project without floors or teams', () => {
     const empty = emptyProject()
-    expect(empty).toEqual({ schemaVersion: 1, name: 'Office plan', floors: [], teams: [], settings: DEFAULT_SETTINGS, accepted: {} })
+    expect(empty).toEqual({
+      schemaVersion: 2,
+      name: 'Office plan',
+      floors: [],
+      domains: [],
+      arts: [],
+      teams: [],
+      settings: DEFAULT_SETTINGS,
+      accepted: {},
+    })
     expect(violations(empty)).toEqual([])
     expect(emptyProject('Head office').name).toBe('Head office')
   })

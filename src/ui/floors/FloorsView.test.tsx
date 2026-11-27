@@ -53,7 +53,7 @@ function teamNamed(name: string): Team {
 }
 
 function addExampleTeams() {
-  dispatch({ type: 'team/addMany', teams: exampleTeams(getProject()) })
+  dispatch(exampleTeams(getProject()).action)
 }
 
 /** jsdom lays nothing out. Give the sheet a size, so pointer positions mean something:

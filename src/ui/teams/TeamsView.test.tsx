@@ -32,18 +32,18 @@ const engine = {
   ...(await vi.importActual<typeof import('../../domain/files')>('../../domain/files')),
 }
 
-/** A plain stand-in for the engine's parser: "name; size; days; group", one team per line,
+/** A plain stand-in for the engine's parser: "name; size; days; domain; ART", one team per line,
  *  days as English three-letter names. A line without a size is a problem. */
 function readLines(text: string): ParsedTeams {
   const parsed: ParsedTeams = { rows: [], problems: [] }
   text.split('\n').forEach((lineText, index) => {
-    const [name = '', size = '', days = '', group = ''] = lineText.split(';').map((part) => part.trim())
+    const [name = '', size = '', days = '', domain = '', art = ''] = lineText.split(';').map((part) => part.trim())
     const line = index + 1
     if (name === '') return
     if (size === '') parsed.problems.push(`Line ${line}: no team size found for ${name}`)
     else {
       const listed = WEEKDAYS.filter((day) => days.toLowerCase().includes(day))
-      parsed.rows.push({ name, size: Number(size), days: listed, group, line })
+      parsed.rows.push({ name, size: Number(size), days: listed, domain, art, line })
     }
   })
   return parsed
@@ -61,7 +61,7 @@ function renderView() {
 }
 
 function addExampleTeams() {
-  dispatch({ type: 'team/addMany', teams: exampleTeams(getProject()) })
+  dispatch(exampleTeams(getProject()).action)
 }
 
 function teamNamed(name: string): Team {
@@ -362,7 +362,7 @@ describe('with the example teams', () => {
   })
 
   describe('a team row', () => {
-    it('edits name, code, group and size', async () => {
+    it('edits name, code, domain, ART and size', async () => {
       const user = renderView()
       const id = teamNamed('Claims Intake').id
       const current = () => getProject().teams.find((team) => team.id === id)!
@@ -377,10 +377,17 @@ describe('with the example teams', () => {
       await user.type(code, 'DESKS')
       expect(current().code).toBe('DESK')
 
-      const group = screen.getByLabelText('Group of Claims Desk')
-      await user.clear(group)
-      await user.type(group, 'Front office')
-      expect(current().group).toBe('Front office')
+      const domainOf = (name: string) => getProject().domains.find((domain) => domain.name === name)?.id
+      const artOf = (name: string) => getProject().arts.find((art) => art.name === name)?.id
+      expect(current()).toMatchObject({ domainId: domainOf('Non-Life'), artId: artOf('Claims ART') })
+      // Another domain takes the team off its ART, which is in the old one.
+      await user.selectOptions(screen.getByLabelText('Domain of Claims Desk'), 'Digital')
+      expect(current()).toMatchObject({ domainId: domainOf('Digital'), artId: null })
+      await user.selectOptions(screen.getByLabelText('ART of Claims Desk'), 'Digital Channels')
+      expect(current()).toMatchObject({ domainId: domainOf('Digital'), artId: artOf('Digital Channels') })
+      // A domain without an ART, as a management team has.
+      await user.selectOptions(screen.getByLabelText('Domain of Claims Desk'), 'Corporate')
+      expect(current()).toMatchObject({ domainId: domainOf('Corporate'), artId: null })
 
       const people = screen.getByLabelText<HTMLInputElement>('People in Claims Desk')
       await user.clear(people)
@@ -502,7 +509,9 @@ describe('with the example teams', () => {
       const original = teamNamed('Claims Intake')
       expect(copy.id).not.toBe(original.id)
       expect(copy.size).toBe(9)
-      expect(copy.group).toBe('Claims')
+      expect(copy.domainId).toBe(original.domainId)
+      expect(copy.artId).toBe(original.artId)
+      expect(copy.artId).not.toBeNull()
       expect(copy.days).toEqual(['tue', 'wed'])
       expect(copy.wishes).toEqual(original.wishes)
       expect(copy.seating).toEqual({})
@@ -770,7 +779,7 @@ describe('with the example teams', () => {
 
     it('adds new teams and updates the ones that exist, as one step', async () => {
       const { user, dialog, text } = await openDialog()
-      fireEvent.change(text, { target: { value: 'Fraud Desk; 5; Tue Thu; Claims\nclaims intake; 12; Mon' } })
+      fireEvent.change(text, { target: { value: 'Fraud Desk; 5; Tue Thu; Non-Life; Claims ART\nclaims intake; 12; Mon' } })
 
       const preview = within(dialog).getByRole('table', { name: 'Teams found in the text' })
       const cells = within(preview)
@@ -778,8 +787,8 @@ describe('with the example teams', () => {
         .slice(1)
         .map((line) => within(line).getAllByRole('cell').map((cell) => cell.textContent))
       expect(cells).toEqual([
-        ['Fraud Desk', '5', 'Tue, Thu', 'Claims', 'New team'],
-        ['claims intake', '12', 'Mon', '', 'Updates the team in the plan'],
+        ['Fraud Desk', '5', 'Tue, Thu', 'Non-Life', 'Claims ART', 'New team'],
+        ['claims intake', '12', 'Mon', '', '', 'Updates the team in the plan'],
       ])
 
       await user.click(within(dialog).getByRole('button', { name: 'Add 1 team and update 1' }))
@@ -789,13 +798,15 @@ describe('with the example teams', () => {
       const added = teamNamed('Fraud Desk')
       expect(added.size).toBe(5)
       expect(added.days).toEqual(['tue', 'thu'])
-      expect(added.group).toBe('Claims')
-
       const intake = teamNamed('Claims Intake')
+      // Joins the ART that is there; nothing is made twice.
+      expect(added).toMatchObject({ domainId: intake.domainId, artId: intake.artId })
+      expect(getProject().arts.filter((art) => art.name === 'Claims ART')).toHaveLength(1)
+
       expect(intake.size).toBe(12)
-      // No group in the row: the team keeps its own. The days are exactly the pasted ones;
-      // what the team said about other days stays.
-      expect(intake.group).toBe('Claims')
+      // No domain or ART in the row: the team keeps its own. The days are exactly the pasted
+      // ones; what the team said about other days stays.
+      expect(intake.artId).not.toBeNull()
       expect(intake.wishes).toEqual({ mon: 'want', tue: 'none', wed: 'can', thu: 'none', fri: 'none' })
       expect(intake.days).toEqual(['mon'])
       expect(violations(getProject())).toEqual([])
@@ -881,14 +892,14 @@ describe('with a single team', () => {
 })
 
 describe('planPaste', () => {
-  function pasted(name: string, size: number, days: ParsedTeamRow['days'] = [], group = '', line = 1): ParsedTeamRow {
-    return { name, size, days, group, line }
+  function pasted(name: string, size: number, days: ParsedTeamRow['days'] = [], domain = '', art = '', line = 1): ParsedTeamRow {
+    return { name, size, days, domain, art, line }
   }
   const plan = () =>
     testProject(
       [floor('f1', row(['a', 'b'], 6))],
       [
-        testTeam('alpha', 8, ['tue', 'thu'], { a: 6 }, { group: 'Claims' }),
+        testTeam('alpha', 8, ['tue', 'thu'], { a: 6 }, { domainId: 'claims' }),
         testTeam('beta', 5, ['mon'], {}, { color: '#e2711d' }),
       ],
     )
@@ -909,27 +920,32 @@ describe('planPaste', () => {
     expect(violations(after)).toEqual([])
   })
 
-  it('updates a team of the same name: size, group when given, and exactly the given days', () => {
+  it('updates a team of the same name: size, domain and ART when given, and exactly the given days', () => {
     const before = plan()
-    const result = planPaste(before, [pasted(' ALPHA ', 10, ['wed', 'thu'], 'Policy')], true)
+    const result = planPaste(before, [pasted(' ALPHA ', 10, ['wed', 'thu'], 'Policy', 'Policy ART')], true)
     expect(result.rows.map((planned) => planned.effect)).toEqual(['update'])
     expect(result.added).toBe(0)
     expect(result.updated).toBe(1)
-    const alpha = reduce(before, { type: 'batch', actions: result.actions }).teams[0]
+    const after = reduce(before, { type: 'batch', actions: result.actions })
+    const alpha = after.teams[0]
     expect(alpha?.size).toBe(10)
-    expect(alpha?.group).toBe('Policy')
+    // Domain and ART are made, as part of the same edit.
+    expect(after.domains.map((domain) => domain.name)).toEqual(['claims', 'Policy'])
+    expect(after.arts).toEqual([{ id: alpha?.artId, name: 'Policy ART', domainId: alpha?.domainId }])
+    expect(after.domains.find((domain) => domain.id === alpha?.domainId)?.name).toBe('Policy')
+    expect(violations(after)).toEqual([])
     expect(alpha?.wishes).toEqual({ mon: 'none', tue: 'none', wed: 'want', thu: 'want', fri: 'none' })
     expect(alpha?.days).toEqual(['wed', 'thu'])
     // The seats the team holds are not touched.
     expect(alpha?.seating).toEqual({ a: 6 })
   })
 
-  it('keeps group and days that the row does not mention', () => {
+  it('keeps domain, ART and days that the row does not mention', () => {
     const before = plan()
     const result = planPaste(before, [pasted('Alpha', 9)], true)
     const alpha = reduce(before, { type: 'batch', actions: result.actions }).teams[0]
     expect(alpha?.size).toBe(9)
-    expect(alpha?.group).toBe('Claims')
+    expect(alpha?.domainId).toBe('claims')
     expect(alpha?.days).toEqual(['tue', 'thu'])
   })
 
@@ -941,7 +957,7 @@ describe('planPaste', () => {
   })
 
   it('leaves existing teams alone when updating is off', () => {
-    const result = planPaste(plan(), [pasted('Alpha', 10), pasted('Gamma', 3, [], '', 2)], false)
+    const result = planPaste(plan(), [pasted('Alpha', 10), pasted('Gamma', 3, [], '', '', 2)], false)
     expect(result.rows.map((planned) => planned.effect)).toEqual(['kept', 'add'])
     expect(result.actions).toHaveLength(1)
     expect(result.updated).toBe(0)
@@ -953,5 +969,64 @@ describe('planPaste', () => {
     expect(pasteSummary({ added: 1, updated: 0 }, 'present')).toBe('Add 1 team')
     expect(pasteSummary({ added: 0, updated: 1 }, 'past')).toBe('Updated 1 team')
     expect(pasteSummary({ added: 0, updated: 0 }, 'present')).toBeNull()
+  })
+})
+
+describe('domains and ARTs', () => {
+  beforeEach(() => {
+    addExampleTeams()
+  })
+
+  it('lists them with their teams, and adds, renames, moves and removes them with undo', async () => {
+    const user = renderView()
+    await user.click(screen.getByRole('button', { name: 'Domains and ARTs' }))
+    const dialog = screen.getByRole('dialog', { name: 'Domains and ARTs' })
+
+    const nonLife = within(dialog).getByRole('region', { name: 'Domain Non-Life' })
+    expect(within(nonLife).getByText('4 teams')).toBeTruthy()
+    expect(within(dialog).getByRole('region', { name: 'Domain Corporate' }).textContent).toContain('2 teams')
+
+    await user.click(within(dialog).getByRole('button', { name: 'Add domain' }))
+    const added = getProject().domains.at(-1)!
+    expect(added.name).toBe('New domain')
+    const name = within(dialog).getByLabelText<HTMLInputElement>('Name of the domain New domain')
+    await user.clear(name)
+    await user.type(name, 'Life')
+    expect(getProject().domains.at(-1)?.name).toBe('Life')
+
+    await user.click(within(dialog).getByRole('button', { name: 'Add ART to Life' }))
+    const art = getProject().arts.at(-1)!
+    expect(art).toMatchObject({ name: 'New ART', domainId: added.id })
+
+    // Moving the Claims ART moves its teams along.
+    const claimsArt = getProject().arts.find((a) => a.name === 'Claims ART')!
+    await user.selectOptions(within(dialog).getByLabelText('Domain of the ART Claims ART'), 'Life')
+    expect(teamNamed('Claims Intake')).toMatchObject({ domainId: added.id, artId: claimsArt.id })
+
+    await user.click(within(dialog).getByRole('button', { name: 'Remove the domain Life' }))
+    expect(getProject().domains.some((d) => d.id === added.id)).toBe(false)
+    expect(teamNamed('Claims Intake')).toMatchObject({ domainId: null, artId: claimsArt.id })
+    expect(violations(getProject())).toEqual([])
+    await user.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(teamNamed('Claims Intake')).toMatchObject({ domainId: added.id, artId: claimsArt.id })
+  })
+
+  it('opens from a team row', async () => {
+    const user = renderView()
+    await user.selectOptions(screen.getByLabelText('ART of Architecture'), 'Edit domains and ARTs…')
+    expect(screen.getByRole('dialog', { name: 'Domains and ARTs' })).toBeTruthy()
+    // Choosing the option changes nothing about the team.
+    expect(teamNamed('Architecture')).toMatchObject({ domainId: null, artId: null })
+  })
+
+  it('offers a team in a domain the ARTs of that domain, and a team in none every ART', () => {
+    renderView()
+    const options = (label: string) =>
+      within(screen.getByLabelText(label))
+        .getAllByRole('option')
+        .map((option) => option.textContent)
+    expect(options('ART of Claims Intake')).toEqual(['–', 'Claims ART', 'Policy ART', 'Edit domains and ARTs…'])
+    expect(options('ART of Finance Operations')).toEqual(['–', 'Edit domains and ARTs…'])
+    expect(options('ART of Architecture')).toEqual(['–', 'Claims ART', 'Policy ART', 'Digital Channels', 'Edit domains and ARTs…'])
   })
 })

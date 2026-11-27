@@ -88,6 +88,7 @@ export function autoSeat(project: Project, options: AutoSeatOptions = {}): AutoS
   const giveUpSeats: Action[] = toSeat.map((t) => ({ type: 'seat/clear', teamId: t.id, scope: 'all' }))
   let working = restart ? reduce(project, { type: 'batch', actions: giveUpSeats }) : project
   const changes: Action[] = []
+  const plans: { team: Team; plan: TeamPlan }[] = []
   for (const team of toSeat) {
     // The team as it is in the working plan: without seats on a restart, untouched otherwise.
     const current = restart ? { ...team, seating: {}, daySeating: {} } : team
@@ -100,11 +101,24 @@ export function autoSeat(project: Project, options: AutoSeatOptions = {}): AutoS
       changes.push(change)
       working = reduce(working, change)
     }
-    const daysWithoutRoom = plan.noRoom.length
+    plans.push({ team, plan })
+  }
+
+  for (const { team, plan } of plans) {
+    // What is said about a day without room must be true of the proposal as a whole: the
+    // desks that were free when this team was looked at may have gone to teams after it.
+    const placed = working.teams.find((t) => t.id === team.id)
+    const noRoom = plan.noRoom.map((day) => {
+      if (!placed) return day
+      const seating = seatableOnly(working, seatingOn(placed, day.day))
+      const search: Search = { project: working, team: placed, days: [day.day], seating, missing: day.missing }
+      return { ...day, free: freeEverywhere(search, useOverflow) }
+    })
+    const daysWithoutRoom = noRoom.length
     outcomes.set(team.id, {
       teamId: team.id,
       result: daysWithoutRoom === 0 ? 'seated' : daysWithoutRoom < team.days.length ? 'partly' : 'unseated',
-      message: describe(project, team.days, plan, useOverflow),
+      message: describe(project, team.days, { ...plan, noRoom }, useOverflow),
     })
   }
 
@@ -218,13 +232,22 @@ function floorsOf(project: Project, seating: Seating): Floor[] {
   return project.floors.filter((f) => f.areas.some((a) => (seating[a.id] ?? 0) > 0))
 }
 
-/** The areas of a floor in which another team of the same group sits on one of the days
- *  the search is for. */
+/** The areas of a floor in which teams close to this one in the organisation sit on one of
+ *  the days the search is for: teams on the same ART, or, when none of them is there, teams
+ *  in the same domain. */
 function groupMates(search: Search, floor: Floor): Area[] {
+  const { team } = search
+  if (team.artId !== null) {
+    const artMates = matesWhere(search, floor, (other) => other.artId === team.artId)
+    if (artMates.length > 0) return artMates
+  }
+  if (team.domainId === null) return []
+  return matesWhere(search, floor, (other) => other.domainId === team.domainId)
+}
+
+function matesWhere(search: Search, floor: Floor, isMate: (other: Team) => boolean): Area[] {
   const { project, team, days } = search
-  const group = team.group.trim()
-  if (group === '') return []
-  const others = project.teams.filter((other) => other.id !== team.id && other.group.trim() === group)
+  const others = project.teams.filter((other) => other.id !== team.id && isMate(other))
   return floor.areas.filter((area) =>
     others.some((other) => days.some((day) => (seatingOn(other, day)[area.id] ?? 0) > 0)),
   )
@@ -301,7 +324,7 @@ function rankBlock(
     newAreas.length,
     // Not one single seat left over in the area that is only partly taken.
     lonelySeat ? 1 : 0,
-    // Next to a team of the same group that is in on the same day.
+    // Next to a team of the same ART, or else of the same domain, that is in on the same day.
     nearGroup ? 0 : 1,
     // Compact. Rounded, so that blocks which are equally compact do not differ by
     // floating point noise and the tie is settled by the order below.
@@ -355,23 +378,28 @@ function findBlock(search: Search, kinds: readonly AreaKind[]): Block | null {
   return best
 }
 
-/** Spreads what is missing over the floors, the floor with the most free seats first, and
- *  returns the seating that results. Null when all floors together do not have the seats:
+/** Spreads what is missing over the floors and returns the seating that results: first the
+ *  floors the team already sits on (so that it ends up on as few floors as possible), then
+ *  the floor with the most free seats. Null when all floors together do not have the seats:
  *  then nothing is placed. */
 function splitOverFloors(search: Search, useOverflow: boolean): Seating | null {
   const { project, missing } = search
+  const ownFloors = new Set(floorsOf(project, search.seating).map((floor) => floor.id))
   for (const kinds of attempts(useOverflow)) {
     const rooms = project.floors.map((floor, index) => roomOn(search, floor, index, kinds))
     if (rooms.reduce((sum, room) => sum + room.total, 0) < missing) continue
-    // Floors with equally many free seats stay in building order: the sort is stable.
-    rooms.sort((a, b) => b.total - a.total)
+    // Floors that tie stay in building order: the sort is stable.
+    rooms.sort(
+      (a, b) => Number(ownFloors.has(b.floor.id)) - Number(ownFloors.has(a.floor.id)) || b.total - a.total,
+    )
     const takes: Take[] = []
     let left = missing
     for (const room of rooms) {
+      if (left <= 0) break
+      // A floor without a free seat (the team's own floor may be full) has nothing to give.
       const wanted = Math.min(left, room.total)
-      const block = bestBlockOn(search, room, wanted)
-      // No block means nothing is wanted any more: everything has been placed.
-      if (!block) break
+      const block = wanted > 0 ? bestBlockOn(search, room, wanted) : null
+      if (!block) continue
       takes.push(...block.takes)
       left -= wanted
     }
@@ -454,6 +482,19 @@ function planTeam(project: Project, team: Team, useOverflow: boolean): TeamPlan 
     if (shared) {
       normal = withTakes(normal, shared.takes)
       added = true
+    }
+    // When that fails because some day is full, the days that do have room should still end
+    // up in the same seats: one block that is free on all of them, before each day is
+    // looked at on its own.
+    const withRoom = shared
+      ? []
+      : together.filter((day) => findBlock(searchFor([day], normal), kinds) !== null)
+    if (withRoom.length >= 2) {
+      const common = findBlock(searchFor(withRoom, normal), kinds)
+      if (common) {
+        for (const day of withRoom) exceptions[day] = withTakes(normal, common.takes)
+        added = true
+      }
     }
     // A day that is still short keeps the seats it has and gets the rest for that day
     // only. From then on it has a seating of its own.

@@ -7,6 +7,7 @@ import { IconChevronDown, IconPlus } from '../icons'
 import { Menu, type MenuItem } from '../primitives'
 import { Assumptions } from './Assumptions'
 import { Legend } from './Legend'
+import { OrgDialog } from './OrgDialog'
 import { PasteTeamsDialog } from './PasteTeamsDialog'
 import { TeamNotesDialog } from './TeamNotesDialog'
 import { TeamsTable } from './TeamsTable'
@@ -20,6 +21,7 @@ export function TeamsView() {
   // started typing teams in: then the table stays, also while it is still or again empty.
   const [keepTable, setKeepTable] = useState(false)
   const [pasteOpen, setPasteOpen] = useState(false)
+  const [orgOpen, setOrgOpen] = useState(false)
   const [notesTeamId, setNotesTeamId] = useState<Id | null>(null)
   // The places the focus is sent to: the two buttons in the header that are always there,
   // and the name field of the table's last row.
@@ -85,6 +87,9 @@ export function TeamsView() {
             <button ref={pasteButtonRef} type="button" className="btn" onClick={openPaste}>
               Paste from a spreadsheet
             </button>
+            <button type="button" className="btn" onClick={() => setOrgOpen(true)}>
+              Domains and ARTs
+            </button>
             <Menu label="More" items={moreItems}>
               More
               <IconChevronDown />
@@ -101,6 +106,7 @@ export function TeamsView() {
               quickAddNameRef={quickAddNameRef}
               onOpenNotes={setNotesTeamId}
               onRemoveLast={() => setKeepTable(true)}
+              onEditOrg={() => setOrgOpen(true)}
             />
             <Legend />
           </>
@@ -126,6 +132,7 @@ export function TeamsView() {
       </div>
 
       <PasteTeamsDialog project={project} open={pasteOpen} onClose={() => setPasteOpen(false)} />
+      <OrgDialog project={project} open={orgOpen} onClose={() => setOrgOpen(false)} />
       <TeamNotesDialog team={findTeam(project, notesTeamId) ?? null} onClose={() => setNotesTeamId(null)} />
     </div>
   )

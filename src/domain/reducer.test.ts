@@ -310,13 +310,12 @@ describe('team/update', () => {
   const start = () => plan([team('alpha', 4, ['tue', 'thu'], { a1: 4 }, { daySeating: { thu: { b1: 4 } } }), team('beta', 2)])
   const update = (p: Project, patch: TeamPatch, id = 'alpha') => apply(p, { type: 'team/update', id, patch })
 
-  it('changes name, code, size, colour, group and notes', () => {
+  it('changes name, code, size, colour and notes', () => {
     const next = update(start(), {
       name: 'Claims Alpha',
       code: 'CA',
       size: 9,
       color: '#2f6fde',
-      group: 'Claims',
       notes: 'Near the window',
     })
     expect(teamOf(next, 'alpha')).toMatchObject({
@@ -324,7 +323,6 @@ describe('team/update', () => {
       code: 'CA',
       size: 9,
       color: '#2f6fde',
-      group: 'Claims',
       notes: 'Near the window',
     })
   })
@@ -383,7 +381,8 @@ describe('team/update', () => {
     const alpha = teamOf(p, 'alpha')
     expect(update(p, {})).toBe(p)
     expect(update(p, { name: alpha.name, code: alpha.code, size: alpha.size, color: alpha.color })).toBe(p)
-    expect(update(p, { group: '', notes: '', attendance: null, homeFloorId: null })).toBe(p)
+    expect(update(p, { domainId: null, artId: null, notes: '', attendance: null, homeFloorId: null })).toBe(p)
+    expect(update(p, { domainId: 'ghost', artId: 'ghost' })).toBe(p)
     // Values that come out the same once they are cleaned up.
     expect(update(p, { size: 4.2 })).toBe(p)
     expect(update(p, { color: alpha.color.toUpperCase() })).toBe(p)
@@ -424,8 +423,10 @@ describe('team/setWish', () => {
   /** Alpha with the given wish for Tuesday. Thursday is a wanted and planned day on which
    *  the team sits in B1; when Tuesday is planned, the team sits in A2 on that day. */
   function alphaSaying(wish: DayWish, tuesdayPlanned: boolean): Team {
-    return team('alpha', 4, tuesdayPlanned ? ['tue', 'thu'] : ['thu'], { a1: 4 }, {
-      wishes: { mon: 'none', tue: wish, wed: 'none', thu: 'want', fri: 'none' },
+    // Friday is a team day with the normal seating (A1), so that seating is in use and
+    // stays the normal one whatever happens to Tuesday.
+    return team('alpha', 4, tuesdayPlanned ? ['tue', 'thu', 'fri'] : ['thu', 'fri'], { a1: 4 }, {
+      wishes: { mon: 'none', tue: wish, wed: 'none', thu: 'want', fri: 'want' },
       daySeating: tuesdayPlanned ? { tue: { a2: 4 }, thu: { b1: 4 } } : { thu: { b1: 4 } },
     })
   }
@@ -455,8 +456,8 @@ describe('team/setWish', () => {
         it(`${situation}: Tuesday is ${planned ? 'planned' : 'not planned'} afterwards`, () => {
           const next = setWish(plan([alphaSaying(from, plannedBefore)]), to)
           const alpha = teamOf(next, 'alpha')
-          expect(alpha.wishes).toEqual({ mon: 'none', tue: to, wed: 'none', thu: 'want', fri: 'none' })
-          expect(alpha.days).toEqual(planned ? ['tue', 'thu'] : ['thu'])
+          expect(alpha.wishes).toEqual({ mon: 'none', tue: to, wed: 'none', thu: 'want', fri: 'want' })
+          expect(alpha.days).toEqual(planned ? ['tue', 'thu', 'fri'] : ['thu', 'fri'])
           // Tuesday keeps its own seating only while it stays planned. A day that is newly
           // planned starts with the normal seating, and Thursday is never touched.
           expect(alpha.daySeating).toEqual(planned && plannedBefore ? { tue: { a2: 4 }, thu: { b1: 4 } } : { thu: { b1: 4 } })
@@ -515,10 +516,15 @@ describe('team/setPlanned', () => {
     expect(violations(next)).toEqual([])
   })
 
-  it('unplans a day without touching the seating of the other days', () => {
+  it('makes the seating of the only day left the normal one, when that day had its own', () => {
     const next = setPlanned(start(), 'tue', false)
     expect(teamOf(next, 'alpha').days).toEqual(['thu'])
-    expect(seatsOf(next, 'alpha')).toStrictEqual({ seating: { a1: 4 }, daySeating: { thu: { b1: 4 } } })
+    // Thursday is now every team day there is: where the team sits then IS its seating. The
+    // old normal seating (A1) would otherwise stay behind unseen and come back with the next
+    // day that is planned.
+    expect(seatsOf(next, 'alpha')).toStrictEqual({ seating: { b1: 4 }, daySeating: {} })
+    expect(violations(next)).toEqual([])
+    expect(seatingOn(teamOf(setPlanned(next, 'fri', true), 'alpha'), 'fri')).toEqual({ b1: 4 })
   })
 
   it("is the planner's decision: it goes against the wishes and leaves them as they are", () => {
@@ -558,11 +564,21 @@ describe('team/moveDay', () => {
     expect(teamOf(next, 'alpha').wishes).toBe(teamOf(p, 'alpha').wishes)
   })
 
-  it('drops the seating the old day had of its own: the new day uses the normal seating', () => {
+  it('takes the seats of the old day along: a seating of its own moves to the new day', () => {
     const next = move(start(), 'tue', 'wed')
-    expect(teamOf(next, 'alpha').daySeating).toEqual({})
-    expect(seatingOn(teamOf(next, 'alpha'), 'wed')).toEqual({ a1: 4 })
+    expect(seatsOf(next, 'alpha')).toStrictEqual({ seating: { a1: 4 }, daySeating: { wed: { a2: 4 } } })
+    expect(seatingOn(teamOf(next, 'alpha'), 'wed')).toEqual({ a2: 4 })
     expect(violations(next)).toEqual([])
+  })
+
+  it('moves a team with one day together with the seats it has on that day', () => {
+    // A team in on Tuesday only, moved on Tuesday with "only Tuesday": that is its seating.
+    const p = plan([team('solo', 4, ['tue'], { a1: 4 })])
+    const reseated = apply(apply(p, setSeats('solo', 'a1', 0, 'tue')), setSeats('solo', 'a2', 4, 'tue'))
+    expect(seatsOf(reseated, 'solo')).toStrictEqual({ seating: { a2: 4 }, daySeating: {} })
+    const moved = apply(reseated, { type: 'team/moveDay', id: 'solo', from: 'tue', to: 'wed' })
+    expect(seatingOn(teamOf(moved, 'solo'), 'wed')).toEqual({ a2: 4 })
+    expect(violations(moved)).toEqual([])
   })
 
   it('keeps the seating another day has of its own', () => {
@@ -577,7 +593,8 @@ describe('team/moveDay', () => {
     expect(seatsOf(next, 'alpha')).toStrictEqual({ seating: { a1: 4 }, daySeating: {} })
     const other = move(start(), 'thu', 'tue')
     expect(teamOf(other, 'alpha').days).toEqual(['tue'])
-    expect(seatsOf(other, 'alpha')).toStrictEqual({ seating: { a1: 4 }, daySeating: { tue: { a2: 4 } } })
+    // Tuesday is the only day left and has its own seating: that becomes the normal one.
+    expect(seatsOf(other, 'alpha')).toStrictEqual({ seating: { a2: 4 }, daySeating: {} })
     expect(violations(next)).toEqual([])
     expect(violations(other)).toEqual([])
   })
@@ -765,7 +782,10 @@ describe('seat/set in a room', () => {
     expect(teamOf(next, 'alpha').seating).toEqual({ a1: 2, a2: 1 })
     // For one day: Tuesday starts from the normal seating, where the team holds 4.
     const tuesday = apply(start(), setSeats('alpha', 'a1', 3, 'tue'))
-    expect(teamOf(tuesday, 'alpha').daySeating).toEqual({ tue: { a1: 3, a2: 1 }, thu: { a1: 1 } })
+    // Both team days now have a seating of their own, so the old normal one is in use on no
+    // day: Tuesday's, with more seats, takes its place and Thursday stays the exception.
+    expect(seatsOf(tuesday, 'alpha')).toStrictEqual({ seating: { a1: 3, a2: 1 }, daySeating: { thu: { a1: 1 } } })
+    expect(seatingOn(teamOf(tuesday, 'alpha'), 'tue')).toEqual({ a1: 3, a2: 1 })
     expect(violations(tuesday)).toEqual([])
   })
 })
@@ -1394,7 +1414,8 @@ describe('batch', () => {
       ],
     })
     expect(teamOf(next, 'alpha').days).toEqual(['wed'])
-    expect(seatsOf(next, 'alpha')).toStrictEqual({ seating: { a1: 4 }, daySeating: { wed: { a1: 2 } } })
+    // Wednesday is the team's only day, so "only Wednesday" edits its one seating.
+    expect(seatsOf(next, 'alpha')).toStrictEqual({ seating: { a1: 2 }, daySeating: {} })
     expect(violations(next)).toEqual([])
   })
 
@@ -1560,7 +1581,7 @@ function actionMaker(random: () => number, spare: Project): (p: Project) => Acti
   const KINDS: AreaKind[] = ['desks', 'desks', 'overflow', 'no-seating']
   const DRAWINGS: (PlanImage | null)[] = [null, { src: 'x', width: 800, height: 400 }, { src: 'y', width: 1000, height: 500 }]
   // Two ids as the app makes them, and three that every object seems to have already.
-  const ISSUE_IDS = ['area-over-capacity|tue|1|a1|alpha+beta', 'overflow-used|wed|-|-|epsilon', 'toString', 'constructor', '__proto__']
+  const ISSUE_IDS = ['area-over-capacity|tue|-|a1|-', 'overflow-used|wed|-|-|epsilon', 'toString', 'constructor', '__proto__']
 
   const day = () => pick(WEEKDAYS)
   const scope = (): SeatingScope => (chance(0.5) ? 'all' : day())
@@ -1590,6 +1611,9 @@ function actionMaker(random: () => number, spare: Project): (p: Project) => Acti
     return chance(0.8) ? some : [...some, ...some].reverse()
   }
 
+  const domainId = (p: Project) => (chance(0.2) ? null : p.domains.length > 0 && chance(0.9) ? pick(p.domains).id : 'ghost-domain')
+  const artId = (p: Project) => (chance(0.2) ? null : p.arts.length > 0 && chance(0.9) ? pick(p.arts).id : 'ghost-art')
+
   const newArea = (p: Project): Area => ({
     id: chance(0.9) ? fresh('area') : areaId(p),
     name: `Area ${serial}`,
@@ -1611,6 +1635,9 @@ function actionMaker(random: () => number, spare: Project): (p: Project) => Acti
     days: days(),
     attendance: chance(0.6) ? null : pick(SHARES),
     homeFloorId: chance(0.6) ? null : floorId(p),
+    // Often not as they belong together: team/add must make them fit.
+    domainId: domainId(p),
+    artId: artId(p),
     seating: seating(p),
     daySeating: daySeating(p),
   })
@@ -1622,7 +1649,9 @@ function actionMaker(random: () => number, spare: Project): (p: Project) => Acti
       { code: pick(['CL', 'TOO LONG', '']) },
       { size: count(13) },
       { color: pick([TEAM_COLORS[2], '#ABC', 'red']) },
-      { group: pick(['', 'Digital']) },
+      { domainId: domainId(p) },
+      { artId: artId(p) },
+      { domainId: domainId(p), artId: artId(p) },
       { notes: pick(['', 'Near the window']) },
       { attendance: chance(0.3) ? null : pick(SHARES) },
       { homeFloorId: chance(0.3) ? null : floorId(p) },
@@ -1668,6 +1697,12 @@ function actionMaker(random: () => number, spare: Project): (p: Project) => Acti
     [4, (p) => ({ type: 'area/add', floorId: floorId(p), area: newArea(p) })],
     [6, (p) => ({ type: 'area/update', id: areaId(p), patch: areaPatch() })],
     [2, (p) => ({ type: 'area/remove', id: areaId(p) })],
+    [2, (p) => ({ type: 'domain/add', domain: { id: chance(0.9) ? fresh('domain') : (domainId(p) ?? 'x'), name: pick(['Non-Life', '', 'x'.repeat(80)]) } })],
+    [2, (p) => ({ type: 'domain/rename', id: domainId(p) ?? 'ghost', name: pick(['Life', 'Digital', '']) })],
+    [1, (p) => ({ type: 'domain/remove', id: domainId(p) ?? 'ghost' })],
+    [2, (p) => ({ type: 'art/add', art: { id: chance(0.9) ? fresh('art') : (artId(p) ?? 'x'), name: pick(['Claims ART', '']), domainId: domainId(p) } })],
+    [3, (p) => ({ type: 'art/update', id: artId(p) ?? 'ghost', patch: pick([{}, { name: 'Policy ART' }, { domainId: domainId(p) }]) })],
+    [1, (p) => ({ type: 'art/remove', id: artId(p) ?? 'ghost' })],
     [3, () => ({ type: 'issue/accept', id: pick(ISSUE_IDS), note: pick(['', 'Fine']), detail: pick(['4 of 4', '5 of 4']) })],
     [3, () => ({ type: 'issue/unaccept', id: pick(ISSUE_IDS) })],
   ]
@@ -1717,6 +1752,12 @@ describe('any sequence of actions', () => {
     'area/add',
     'area/update',
     'area/remove',
+    'domain/add',
+    'domain/rename',
+    'domain/remove',
+    'art/add',
+    'art/update',
+    'art/remove',
     'issue/accept',
     'issue/unaccept',
     'batch',

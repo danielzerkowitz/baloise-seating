@@ -16,7 +16,7 @@ const EFFECT_WORDS: Record<PasteEffect, string> = {
   kept: 'Already in the plan, left as it is',
 }
 
-const EXAMPLE = 'Claims Intake, 9, Tue Thu, Claims\nUnderwriting, 10, Tue Wed, Policy'
+const EXAMPLE = 'Claims Intake, 9, Tue Thu, Non-Life, Claims ART\nUnderwriting, 10, Tue Wed, Non-Life'
 
 /** Add many teams at once from a list copied out of a spreadsheet. The dialog shows what it
  *  read and what will happen with every line before anything changes. */
@@ -70,7 +70,7 @@ export function PasteTeamsDialog(props: { project: Project; open: boolean; onClo
       <div className="stack stack--loose">
         <Field
           label="List of teams"
-          hint="One team per line: name, size, days, group. Copy the columns straight from a spreadsheet."
+          hint="One team per line: name, size, days, domain, ART. Copy the columns straight from a spreadsheet. New domains and ARTs are added."
         >
           {({ id, describedBy }) => (
             <textarea
@@ -96,7 +96,8 @@ export function PasteTeamsDialog(props: { project: Project; open: boolean; onClo
                   People
                 </th>
                 <th scope="col">Days</th>
-                <th scope="col">Group</th>
+                <th scope="col">Domain</th>
+                <th scope="col">ART</th>
                 <th scope="col">What happens</th>
               </tr>
             </thead>
@@ -106,7 +107,8 @@ export function PasteTeamsDialog(props: { project: Project; open: boolean; onClo
                   <td>{row.name}</td>
                   <td className="num">{row.size}</td>
                   <td>{daysShort(row.days, 'none given')}</td>
-                  <td>{row.group}</td>
+                  <td>{row.domain}</td>
+                  <td>{row.art}</td>
                   <td>{EFFECT_WORDS[effect]}</td>
                 </tr>
               ))}

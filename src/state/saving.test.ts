@@ -319,3 +319,144 @@ describe('the stored plan is untrusted', () => {
     expect(saver.getStatus()).toBe('unreachable')
   })
 })
+
+describe('found in review', () => {
+  /** Makes the next update wait until `release()` is called. */
+  function holdNextUpdate(rows: ReturnType<typeof memoryRows>) {
+    const update = rows.update
+    let release = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    rows.update = async (...args) => {
+      rows.update = update
+      await held
+      return update(...args)
+    }
+    return () => release()
+  }
+
+  it('saves an undo made while the edit it undoes was being saved', async () => {
+    const rows = memoryRows()
+    rows.table.set('main', { data: { ...startingProject(), name: 'Before' }, version: 1 })
+    const { saver, store } = openWindow(rows)
+    await saver.start()
+
+    const release = holdNextUpdate(rows)
+    store.dispatch(rename('Edit'))
+    await vi.advanceTimersByTimeAsync(20)
+    store.undo()
+    release()
+    // Only timers, as in the app: nothing else would call flush().
+    await vi.advanceTimersByTimeAsync(200)
+
+    expect(store.getState().name).toBe('Before')
+    expect(storedName(rows)).toBe('Before')
+    expect(saver.getStatus()).toBe('saved')
+    expect(saver.hasUnsaved()).toBe(false)
+  })
+
+  it('"Keep mine" writes the plan even when it was undone back to the one saved before', async () => {
+    const rows = memoryRows()
+    rows.table.set('main', { data: { ...startingProject(), name: 'Mine' }, version: 1 })
+    const a = openWindow(rows)
+    const b = openWindow(rows)
+    await a.saver.start()
+    await b.saver.start()
+    a.store.dispatch(rename('Theirs'))
+    await settle(a.saver)
+    b.store.dispatch(rename('Mine, edited'))
+    await settle(b.saver)
+    expect(b.saver.getStatus()).toBe('conflict')
+
+    b.store.undo()
+    await b.saver.keepMine()
+
+    expect(storedName(rows)).toBe('Mine')
+    expect(b.saver.getStatus()).toBe('saved')
+  })
+
+  it('takes a save whose answer was lost, but that did get through, for its own and not for a conflict', async () => {
+    const rows = memoryRows()
+    rows.table.set('main', { data: startingProject(), version: 1 })
+    const { saver, store } = openWindow(rows)
+    await saver.start()
+    const update = rows.update
+    rows.update = async (...args) => {
+      rows.update = update
+      await update(...args)
+      throw new Error('Failed to fetch')
+    }
+
+    store.dispatch(rename('Landed'))
+    await settle(saver)
+    expect(saver.getStatus()).toBe('failed')
+    store.dispatch(rename('Landed, then more'))
+    await vi.advanceTimersByTimeAsync(60)
+    await saver.flush()
+
+    expect(saver.getStatus()).toBe('saved')
+    expect(storedName(rows)).toBe('Landed, then more')
+    expect(rows.table.get('main')?.version).toBe(3)
+  })
+
+  it('still reports a conflict when the lost save did not get through and someone else saved', async () => {
+    const rows = memoryRows()
+    rows.table.set('main', { data: startingProject(), version: 1 })
+    const a = openWindow(rows)
+    const b = openWindow(rows)
+    await a.saver.start()
+    await b.saver.start()
+    rows.down = true
+    b.store.dispatch(rename('Lost'))
+    await settle(b.saver)
+    rows.down = false
+    a.store.dispatch(rename('Theirs'))
+    await settle(a.saver)
+
+    await vi.advanceTimersByTimeAsync(60)
+    await b.saver.flush()
+
+    expect(b.saver.getStatus()).toBe('conflict')
+    expect(storedName(rows)).toBe('Theirs')
+  })
+
+  it('"Load theirs" says so, and changes nothing, when theirs cannot be read', async () => {
+    const rows = memoryRows()
+    rows.table.set('main', { data: startingProject(), version: 1 })
+    const { saver, store } = openWindow(rows)
+    await saver.start()
+    rows.table.set('main', { data: { ...startingProject(), schemaVersion: 999 }, version: 2 })
+    store.dispatch(rename('Mine'))
+    await settle(saver)
+    expect(saver.getStatus()).toBe('conflict')
+
+    await expect(saver.loadLatest()).rejects.toThrow()
+
+    expect(saver.getStatus()).toBe('conflict')
+    expect(store.getState().name).toBe('Mine')
+  })
+
+  it('does not take its own save for news from someone else', async () => {
+    const rows = memoryRows()
+    rows.table.set('main', { data: startingProject(), version: 1 })
+    const { saver, store } = openWindow(rows)
+    await saver.start()
+    // The version is asked for, and answered, before this window's save lands.
+    const readVersion = rows.readVersion
+    let answer = () => {}
+    rows.readVersion = async (id) => {
+      const stale = await readVersion(id)
+      await new Promise<void>((resolve) => (answer = resolve))
+      return stale
+    }
+
+    const pulled = saver.pullNewer()
+    await vi.advanceTimersByTimeAsync(0)
+    store.dispatch(rename('Own save'))
+    await settle(saver)
+    answer()
+
+    expect(await pulled).toBe(false)
+    expect(store.getState().name).toBe('Own save')
+    rows.readVersion = readVersion
+  })
+})

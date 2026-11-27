@@ -1,3 +1,4 @@
+import { normalizeProject } from '../domain/files'
 import type { Project } from '../domain/types'
 import type { HistoryStore } from './createHistoryStore'
 import { PlanChangedElsewhere, type PlanStorage, type Saved } from './storage'
@@ -37,9 +38,11 @@ export interface Saver {
   start(): Promise<void>
   /** Saves now, without waiting for the debounce. */
   flush(): Promise<void>
-  /** After a conflict: replace this plan with the stored one. Edits made here are dropped. */
+  /** After a conflict: replace this plan with the stored one. Edits made here are dropped.
+   *  Rejects, changing nothing, when the stored plan cannot be read. */
   loadLatest(): Promise<void>
-  /** After a conflict: save this plan over the stored one. */
+  /** After a conflict: save this plan over the stored one. Rejects, changing nothing,
+   *  when the storage cannot be reached. */
   keepMine(): Promise<void>
   /** When nothing is waiting to be saved and someone else has saved a newer plan, loads it.
    *  True when it did. */
@@ -63,6 +66,10 @@ export function createSaver(store: HistoryStore<Project, unknown>, options: Save
   /** One save at a time: two at once would both build on the same version. */
   let inFlight: Promise<void> | null = null
   let again = false
+  /** True while a stored plan is being taken over: that is no edit to save. */
+  let adopting = false
+  /** A save that failed without an answer: it may or may not have reached the storage. */
+  let uncertain: { project: Project; over: number | null } | null = null
 
   function setStatus(next: SaveStatus) {
     if (next === status) return
@@ -85,7 +92,33 @@ export function createSaver(store: HistoryStore<Project, unknown>, options: Save
   function adopt(saved: Saved) {
     lastSaved = saved.project
     version = saved.version
-    store.load(saved.project)
+    uncertain = null
+    adopting = true
+    try {
+      store.load(saved.project)
+    } finally {
+      adopting = false
+    }
+  }
+
+  /** After a refused save: was it refused because an earlier save of ours did get through,
+   *  only its answer was lost? Then that save is what is stored, and saving goes on from
+   *  there instead of reporting a conflict with ourselves. */
+  async function ownSaveLanded(): Promise<boolean> {
+    if (!uncertain) return false
+    const attempt = uncertain
+    let stored: Saved | null
+    try {
+      stored = await storage.load()
+    } catch {
+      return false
+    }
+    if (!stored || stored.version !== (attempt.over ?? 0) + 1) return false
+    if (canonical(stored.project) !== canonical(normalizeProject(attempt.project))) return false
+    version = stored.version
+    lastSaved = attempt.project
+    uncertain = null
+    return true
   }
 
   async function saveOnce(): Promise<void> {
@@ -94,17 +127,30 @@ export function createSaver(store: HistoryStore<Project, unknown>, options: Save
       setStatus('saved')
       return
     }
+    const over = version
     try {
-      version = await storage.save(project, version)
+      version = await storage.save(project, over)
       lastSaved = project
-      // Something may have changed while the save was running.
-      setStatus(store.getState() === project ? 'saved' : 'saving')
+      uncertain = null
+      if (store.getState() === project) {
+        setStatus('saved')
+      } else {
+        // Changed while the save was running, possibly back to what was stored before
+        // (an undo): save again.
+        setStatus('saving')
+        again = true
+      }
     } catch (error) {
       if (error instanceof PlanChangedElsewhere) {
+        if (await ownSaveLanded()) {
+          again = true
+          return
+        }
         setStatus('conflict')
         return
       }
       console.warn('Could not save the plan.', error)
+      uncertain = { project, over }
       setStatus('failed')
       if (storage.where === 'database') schedule(retryMs)
     }
@@ -165,8 +211,9 @@ export function createSaver(store: HistoryStore<Project, unknown>, options: Save
         if (storage.where === 'database') void flush()
       }
       store.subscribe(() => {
-        // Loading what is stored is no edit.
-        if (store.getState() === lastSaved) return
+        // Taking over what is stored is no edit. Anything else is, even an undo back to
+        // the stored plan: the storage may hold a newer one by the time it is saved.
+        if (adopting) return
         if (status !== 'conflict') setStatus('saving')
         schedule(debounceMs)
       })
@@ -175,40 +222,41 @@ export function createSaver(store: HistoryStore<Project, unknown>, options: Save
     flush,
 
     async loadLatest() {
-      try {
-        const saved = await storage.load()
-        if (saved) {
-          adopt(saved)
-          setStatus('saved')
-        } else {
-          // Theirs is gone altogether: this plan takes its place.
-          version = null
-          setStatus('saving')
-          await flush()
-        }
-      } catch (error) {
-        console.warn('Could not read the saved plan.', error)
+      const saved = await storage.load()
+      if (saved) {
+        adopt(saved)
+        setStatus('saved')
+      } else {
+        // Theirs is gone altogether: this plan takes its place.
+        version = null
+        lastSaved = undefined
+        setStatus('saving')
+        await flush()
       }
     },
 
     async keepMine() {
-      try {
-        version = await storage.version()
-      } catch (error) {
-        console.warn('Could not read the saved plan.', error)
-        return
-      }
+      version = await storage.version()
+      uncertain = null
+      // Whatever this window last saved, the storage now holds theirs: write this plan
+      // even when it is the one saved before.
+      lastSaved = undefined
       setStatus('saving')
       await flush()
     },
 
     async pullNewer() {
       if (storage.where !== 'database' || status !== 'saved' || inFlight) return false
+      // This window's own saves move `version` on; an answer from before one of them is
+      // no news from someone else.
+      const at = version
       try {
-        if ((await storage.version()) === version) return false
+        const stored = await storage.version()
+        if (stored === at || version !== at) return false
         const saved = await storage.load()
-        // Only when nothing was edited meanwhile: an edit is saved, or refused, instead.
-        if (!saved || status !== 'saved' || store.getState() !== lastSaved) return false
+        // Only when nothing was edited or saved meanwhile.
+        if (!saved || version !== at || saved.version === at || inFlight) return false
+        if (status !== 'saved' || store.getState() !== lastSaved) return false
         adopt(saved)
         return true
       } catch {
@@ -218,4 +266,13 @@ export function createSaver(store: HistoryStore<Project, unknown>, options: Save
 
     hasUnsaved: () => started && store.getState() !== lastSaved,
   }
+}
+
+/** JSON with the keys of every object in order: the database does not keep key order. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner && typeof inner === 'object' && !Array.isArray(inner)
+      ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : inner,
+  )
 }

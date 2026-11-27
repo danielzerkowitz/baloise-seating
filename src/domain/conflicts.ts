@@ -2,7 +2,6 @@ import { clusterAreas } from './geometry'
 import {
   dayLoad,
   dayOccupancy,
-  describeSeating,
   findFloor,
   hasDayException,
   isSeatable,
@@ -11,7 +10,17 @@ import {
   teamDayStatus,
   type AreaOccupancy,
 } from './model'
-import { WEEKDAY_NAME, WEEKDAYS, type Area, type Floor, type Id, type Project, type Team, type Weekday } from './types'
+import {
+  WEEKDAY_NAME,
+  WEEKDAYS,
+  type Area,
+  type Floor,
+  type Id,
+  type Project,
+  type Seating,
+  type Team,
+  type Weekday,
+} from './types'
 
 /* Conflict recognition. `findIssues` looks at a whole project and lists everything that is
    wrong, unfinished or worth knowing, in four levels:
@@ -87,9 +96,12 @@ export const RULE_SEVERITY: Record<IssueRule, Severity> = {
 export const SEVERITY_ORDER: readonly Severity[] = ['error', 'todo', 'warning', 'info']
 
 export interface Issue {
-  /** Stable while the same problem persists: `rule|day|floorId|areaId|teamIds`, with `-` for
-   *  a missing part and team ids joined by `+`. Usable as a React key, to remember a
-   *  selection, and as the key of an acceptance. It does NOT contain the numbers. */
+  /** Stable while the same problem persists: `rule|day|floor|area|teams`, where a part is
+   *  only filled in when the problem is about that floor, area or team (otherwise `-`), and
+   *  team ids are joined by `+`. An over-full area is `area-over-capacity|tue|-|ne1|-`
+   *  whoever sits there; a team short of seats is `team-short|tue|-|-|claims` wherever it
+   *  sits. Usable as a React key, to remember a selection, and as the key of an acceptance.
+   *  It does NOT contain the numbers. */
   id: string
   rule: IssueRule
   severity: Severity
@@ -201,9 +213,40 @@ interface Subject {
   teamIds: Id[]
 }
 
+/** Which parts of its subject identify an issue, besides the rule and the day. An id has to
+ *  stay the same for as long as the same problem persists (acceptances hang on it), so it
+ *  names only what the problem is ABOUT. An over-full area is the same problem whoever
+ *  sits in it; a team that is short of seats is the same problem on whichever floor its
+ *  first seats happen to be. The other parts of the subject only say where to look. */
+const IDENTIFIED_BY: Record<IssueRule, { floor?: true; area?: true; teams?: true }> = {
+  'area-over-capacity': { area: true },
+  'seats-in-room': { area: true, teams: true },
+  'day-over-capacity': {},
+  'day-needs-overflow': {},
+  'day-uses-reserve': {},
+  'team-unseated': { teams: true },
+  'team-short': { teams: true },
+  'team-split-floors': { teams: true },
+  'wish-unmet': { teams: true },
+  'unwanted-day': { teams: true },
+  'overflow-used': { teams: true },
+  'team-scattered': { floor: true, teams: true },
+  'seat-differs': { teams: true },
+  'team-over-seated': { teams: true },
+  'no-team-days': { teams: true },
+  'off-home-floor': { teams: true },
+}
+
 function makeIssue(rule: IssueRule, subject: Subject, title: string, detail: string): Issue {
   const { day, floorId, areaId, teamIds } = subject
-  const id = [rule, day ?? '-', floorId ?? '-', areaId ?? '-', teamIds.join('+') || '-'].join('|')
+  const by = IDENTIFIED_BY[rule]
+  const id = [
+    rule,
+    day ?? '-',
+    (by.floor && floorId) || '-',
+    (by.area && areaId) || '-',
+    (by.teams && teamIds.join('+')) || '-',
+  ].join('|')
   return { id, rule, severity: RULE_SEVERITY[rule], day, floorId, areaId, teamIds, title, detail }
 }
 
@@ -409,14 +452,22 @@ function teamDayIssues(project: Project, team: Team, day: Weekday): Issue[] {
   // A day on which the team holds no seat at all is already listed as "still to seat";
   // saying that it also "sits somewhere else" would only be noise.
   if (hasDayException(team, day) && status.seated + status.inNoSeating > 0) {
-    // Compare with a day that uses the normal seating, if the team has one.
-    const usualDay = team.days.find((d) => !hasDayException(team, d))
-    const here = describeSeating(project, team, day) || 'not seated'
-    const elsewhere =
-      usualDay === undefined
-        ? 'Every team day has its own seating'
-        : `Other days: ${describeSeating(project, team, usualDay) || 'not seated'}`
-    add('seat-differs', `${team.name} sits somewhere else on ${dayName}`, `${dayName}: ${here}. ${elsewhere}`)
+    // What the team has on the days without a seating of their own. (The reducer sees to
+    // it that there is such a day; the normal seating itself is the fallback.)
+    const usual = team.seating
+    const own = seatingOn(team, day)
+    const sameAreas = sameKeys(own, usual)
+    // The seat numbers are part of the detail on purpose: an accepted note opens again when
+    // they change.
+    const here = describeSeats(project, own) || 'not seated'
+    const elsewhere = describeSeats(project, usual) || 'not seated'
+    add(
+      'seat-differs',
+      sameAreas
+        ? `${team.name} has a different number of seats on ${dayName}`
+        : `${team.name} sits somewhere else on ${dayName}`,
+      `${dayName}: ${here}. Other days: ${elsewhere}`,
+    )
   }
 
   if (team.wishes[day] === 'cannot') {
@@ -433,13 +484,32 @@ function teamDayIssues(project: Project, team: Team, day: Weekday): Issue[] {
       add(
         'off-home-floor',
         `${team.name} is not on its preferred floor on ${dayName}`,
-        `Preferred: ${home.name}. Seated on: ${joinAnd(floors.map((f) => f.floor.name))}`,
+        // With the numbers, so that an accepted note opens again when the team shifts further
+        // away from its floor.
+        `Preferred: ${home.name}. Seated on: ${joinAnd(floors.map((f) => `${f.floor.name} (${plural(f.seats, 'seat')})`))}`,
         { floorId: away.floor.id, areaId: null },
       )
     }
   }
 
   return issues
+}
+
+/** True when two seatings use exactly the same areas (whatever the seat numbers). */
+function sameKeys(a: Seating, b: Seating): boolean {
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every((key) => key in b)
+}
+
+/** A seating in words, with its numbers: "Floor 4: 4 in NE 1, 2 in NE 2". Empty when it
+ *  holds no seat in an area of the project. */
+function describeSeats(project: Project, seating: Seating): string {
+  const parts: string[] = []
+  for (const floor of project.floors) {
+    const held = floor.areas.filter((area) => (seating[area.id] ?? 0) > 0)
+    if (held.length > 0) parts.push(`${floor.name}: ${held.map((area) => `${seating[area.id]} in ${area.name}`).join(', ')}`)
+  }
+  return parts.join('; ')
 }
 
 /** A day the team asked for that is not planned (`wish-unmet`). It is about the week, not
