@@ -59,18 +59,17 @@
 }
 
 /* Column widths are fixed, so that typing a long name or seating a team never makes the
-   weekdays jump. Team and Where have no width of their own and share what is left: the
-   other columns add up to 50rem, and the least the table is wide leaves the two 14.75rem
-   to share. With that it fits a window of 1100px, the narrowest the app is made for, also
-   when a scrollbar takes its part of the width. */
+   weekdays jump. Only Team has no width of its own: it gets what is left, at least about
+   7rem. The other columns add up to 65.25rem; in a narrower window the table scrolls
+   sideways rather than squeeze the team names. */
 .teams-table {
-  min-width: 66rem;
+  min-width: 72rem;
   table-layout: fixed;
 }
 
 /* With the column for the preferred floor. */
 .teams-table--floors {
-  min-width: 74rem;
+  min-width: 80rem;
 }
 
 .teams-col--color {
@@ -83,6 +82,10 @@
 
 .teams-col--domain,
 .teams-col--art {
+  width: 6.5rem;
+}
+
+.teams-col--where {
   width: 8rem;
 }
 

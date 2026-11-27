@@ -71,7 +71,7 @@ export function TeamsTable(props: {
             <col key={day} className="teams-col--day" />
           ))}
           {withFloor ? <col className="teams-col--floor" /> : null}
-          <col />
+          <col className="teams-col--where" />
           <col className="teams-col--menu" />
         </colgroup>
         <thead>
