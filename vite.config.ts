@@ -16,6 +16,15 @@ export default defineConfig({
   preview: { port: 5184, strictPort: true },
   test: {
     environment: 'node',
+    // Tests never talk to the real database, whatever .env.local says.
+    env: {
+      VITE_SUPABASE_URL: '',
+      VITE_SUPABASE_PUBLISHABLE_KEY: '',
+      VITE_SUPABASE_ANON_KEY: '',
+      NEXT_PUBLIC_SUPABASE_URL: '',
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: '',
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: '',
+    },
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
 })
