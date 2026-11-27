@@ -1,0 +1,142 @@
+/* Printing: the dialog that chooses what to print, and the pages that go to paper. The
+   pages live in .print-root, which app.css hides on screen and shows in print. */
+
+@page {
+  size: A4 landscape;
+  margin: 10mm;
+}
+
+/* ---------- The print dialog ---------- */
+
+.print-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.print-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.print-legend {
+  padding: 0 0 var(--s-2);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.print-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+}
+
+/* A box with its label. Only as wide as its text, so that a click next to it does nothing. */
+.print-check {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  cursor: pointer;
+}
+
+.print-box {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+/* How much paper the choice takes. */
+.print-paper {
+  color: var(--ink-2);
+}
+
+.print-count {
+  color: var(--ink);
+  font-size: var(--sign-sm);
+}
+
+/* ---------- The pages ---------- */
+
+/* A plan as wide as the page would be too tall for some floors: the page says inline how
+   wide its plan may be, and the plan sits in the middle. The legend and the title block
+   under it keep the full width. */
+.print-sheet .sheet {
+  max-width: var(--print-plan-width);
+  margin: 0 auto;
+}
+
+.print-draft {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+  color: var(--conflict-ink);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.print-heading {
+  margin-bottom: var(--s-4);
+}
+
+.print-heading-view {
+  color: var(--ink-2);
+  font-weight: 400;
+}
+
+.print-number {
+  font-size: var(--text-lg);
+}
+
+.print-total {
+  font-weight: 600;
+}
+
+/* The last line of every page: which plan, printed when. */
+.print-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s-4);
+  margin-top: var(--s-4);
+  padding-top: var(--s-2);
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: var(--text-xs);
+}
+
+@media print {
+  /* Team colours and conflict hatching are the content: print them as they are. */
+  .print-root,
+  .print-root * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Every page of the job starts on a new sheet of paper. */
+  .print-page {
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .print-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  /* On paper the page is the paper. */
+  .print-root .paper {
+    padding: 0;
+    box-shadow: none;
+  }
+
+  .print-row {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}

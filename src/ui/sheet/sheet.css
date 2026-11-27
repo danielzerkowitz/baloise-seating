@@ -1,0 +1,484 @@
+/* The drawing sheet. The plan image carries the page; everything drawn on it is either a
+   team (its colour) or a status (red hatching). */
+
+/* ---------- Viewport: scroll and zoom ---------- */
+
+.viewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.viewport__scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--s-5);
+  overscroll-behavior: contain;
+}
+
+.viewport__stage {
+  min-width: 100%;
+  margin: 0 auto;
+}
+
+.viewport__tools {
+  position: absolute;
+  left: var(--s-4);
+  bottom: var(--s-4);
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-float);
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+}
+
+.viewport__zoom {
+  min-width: 2.75rem;
+  text-align: center;
+  font-size: var(--sign-sm);
+  font-weight: 500;
+}
+
+/* ---------- Paper and sheet ---------- */
+
+.paper {
+  padding: var(--s-4) var(--s-4) var(--s-3);
+  border-radius: var(--r-sheet);
+  background: var(--surface);
+  box-shadow: var(--shadow-sheet);
+}
+
+.sheet {
+  position: relative;
+  width: 100%;
+  isolation: isolate;
+  user-select: none;
+}
+
+.sheet__plan {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.sheet__blank {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--line-strong);
+  background-color: #f1f3f6;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 2.5% 5%;
+}
+
+.sheet__tints,
+.sheet__areas {
+  position: absolute;
+  inset: 0;
+}
+
+.sheet__tints {
+  pointer-events: none;
+}
+
+/* ---------- Team colour on the drawing ---------- */
+
+.tint {
+  position: absolute;
+  display: flex;
+  gap: 2px;
+}
+
+.tint.is-col {
+  flex-direction: column;
+}
+
+.tint__band,
+.tint__free {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Multiply keeps the linework of the drawing visible: desks take the team's colour, lines
+   stay black. */
+.tint__band {
+  background: var(--team);
+  mix-blend-mode: multiply;
+  opacity: 0.86;
+  transition: opacity 160ms var(--ease);
+}
+
+.sheet.has-emphasis .tint__band:not(.is-active) {
+  opacity: 0.3;
+}
+
+/* ---------- Areas ---------- */
+
+.area {
+  position: absolute;
+  display: block;
+  padding: 0;
+  border: 1.5px solid rgb(22 35 59 / 0.4);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+button.area {
+  cursor: pointer;
+}
+
+.area--overflow {
+  border-style: dashed;
+}
+
+.area--no-seating {
+  border-color: transparent;
+}
+
+button.area:hover,
+button.area:focus-visible {
+  border-color: var(--ink);
+  z-index: 2;
+}
+
+button.area:focus-visible {
+  box-shadow: var(--focus);
+}
+
+.area.is-selected {
+  border: 2px solid var(--ink);
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 4px var(--ink);
+  z-index: 3;
+}
+
+/* Rooms: quiet until you point at them, then clearly "not here". */
+button.area--no-seating:hover,
+button.area--no-seating:focus-visible,
+.area--no-seating.is-selected {
+  border: 1.5px dashed var(--ink-2);
+  background: repeating-linear-gradient(-45deg, rgb(22 35 59 / 0.1) 0 2px, transparent 2px 9px);
+}
+
+.area.is-conflict {
+  border: 2.5px solid var(--conflict);
+  background: repeating-linear-gradient(-45deg, rgb(207 32 56 / 0.3) 0 4px, transparent 4px 10px);
+  z-index: 2;
+}
+
+/* The tag: a small flag on the top edge with the area's name and how full it is. */
+.area__tag {
+  position: absolute;
+  left: -1.5px;
+  top: 0;
+  transform: translateY(-58%);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+  padding: 0 4px;
+  border: 1px solid rgb(22 35 59 / 0.4);
+  border-radius: 2px;
+  background: var(--surface);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.area__count--free {
+  color: var(--ink);
+}
+
+.sheet.has-active .area.can-blocked:not(.is-mine) .area__tag {
+  opacity: 0.55;
+}
+
+.area__count {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.area.is-conflict .area__tag {
+  border-color: var(--conflict);
+  background: var(--conflict);
+  color: #fff;
+}
+
+.area.is-conflict .area__count {
+  color: #fff;
+}
+
+.area--no-seating .area__tag {
+  display: none;
+}
+
+.area--no-seating:hover .area__tag,
+.area--no-seating:focus-visible .area__tag,
+.area--no-seating.is-selected .area__tag,
+.area--no-seating.is-conflict .area__tag {
+  display: inline-flex;
+}
+
+/* Team chips sit in cells that mirror the colour bands underneath. */
+.area__cells {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  gap: 2px;
+}
+
+.area__cells.is-col {
+  flex-direction: column;
+}
+
+.area__cell {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  container-type: size;
+}
+
+.area__chip {
+  min-height: 1.125rem;
+  padding: 0 0.4rem;
+  gap: 0.3em;
+  font-size: 0.6875rem;
+  box-shadow: 0 0 0 1.5px rgb(255 255 255 / 0.92);
+}
+
+.area__seats {
+  font-family: var(--font-sign);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+@container (max-width: 3.1rem) {
+  .area__seats {
+    display: none;
+  }
+
+  .area__chip {
+    padding: 0 0.3rem;
+  }
+}
+
+@container (max-width: 1.7rem) or (max-height: 1rem) {
+  .area__chip {
+    display: none;
+  }
+}
+
+/* ---------- Seating a team: previews ---------- */
+
+.sheet.has-active .area.is-mine {
+  border: 2.5px solid var(--team);
+  box-shadow: 0 0 0 1.5px rgb(255 255 255 / 0.9);
+}
+
+.sheet.has-active .area.can-add {
+  border: 1.5px dashed var(--team);
+}
+
+.sheet.has-active button.area.can-add:hover,
+.sheet.has-active button.area.can-add:focus-visible,
+.sheet.has-active .area.can-add.is-dragover {
+  border: 2.5px solid var(--team);
+  background: color-mix(in srgb, var(--team) 22%, transparent);
+}
+
+.sheet.has-active button.area.can-blocked {
+  cursor: not-allowed;
+}
+
+.area__preview {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 4;
+  transform: translate(-50%, -50%);
+  display: none;
+  align-items: center;
+  min-height: 1.5rem;
+  padding: 0 0.5rem;
+  border-radius: var(--r-pill);
+  background: var(--team);
+  color: var(--team-ink);
+  box-shadow: 0 0 0 2px #fff;
+  font-size: 1.125rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.area.can-remove .area__preview {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 0 0 2px var(--ink);
+}
+
+button.area:hover .area__preview,
+button.area:focus-visible .area__preview,
+.area.is-dragover .area__preview {
+  display: inline-flex;
+}
+
+/* ---------- Spotlight: "here it is" after Show on plan ---------- */
+
+.area__spot {
+  position: absolute;
+  inset: -4px;
+  border-radius: 5px;
+  border: 3px solid var(--ink);
+  pointer-events: none;
+  animation: spot 900ms var(--ease) 3 both;
+}
+
+@keyframes spot {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.35);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .area__spot {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* ---------- Legend and title block ---------- */
+
+.paper__footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-5);
+  margin-top: var(--s-4);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-4);
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.legend__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.legend__seats {
+  font-size: var(--text-lg);
+  color: var(--ink-2);
+}
+
+.legend__empty {
+  color: var(--ink-3);
+}
+
+/* A drawing's title block: floor, day and count, boxed, bottom right. */
+.titleblock {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  margin: 0;
+  border: 1.5px solid var(--ink);
+}
+
+.titleblock__cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: var(--s-1) var(--s-3);
+  border-left: 1px solid var(--ink);
+}
+
+.titleblock__cell:first-child {
+  border-left: 0;
+}
+
+.titleblock__cell--floor {
+  justify-content: center;
+  min-width: 3.5rem;
+  padding: 0 var(--s-3);
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.titleblock__floor {
+  font-size: 3rem;
+  text-align: center;
+}
+
+.titleblock__main {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.titleblock__sub {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.titleblock__cell--count {
+  align-items: flex-end;
+}
+
+.titleblock__count {
+  font-size: var(--sign-md);
+}
+
+.titleblock__count.is-over {
+  color: var(--conflict);
+}
+
+.titleblock__of {
+  font-size: var(--sign-sm);
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+@media (max-width: 900px) {
+  .paper__footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .titleblock {
+    align-self: flex-end;
+  }
+}

@@ -1,0 +1,152 @@
+/* The bar on top of every view: one row that never wraps. */
+
+.shell-bar {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: var(--bar-h);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+/* Everything but the File menu. When the window is narrower than what is in here, this
+   part scrolls sideways. The File menu stays outside it, because a box that scrolls cuts
+   off whatever drops out of it, such as the menu's list. */
+.shell-scroll {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: 0 var(--s-3) 0 var(--s-4);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+/* Left and right share the spare room equally, which keeps the view switch in the middle.
+   Neither gets narrower than what it holds. */
+.shell-start {
+  flex: 1 1 0;
+  min-width: max-content;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.shell-end {
+  flex: 1 1 0;
+  min-width: max-content;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-3);
+}
+
+.shell-product {
+  flex: none;
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: var(--leading-ui);
+  white-space: nowrap;
+}
+
+/* The plan's name: reads as text until you point at it or type in it. Its width follows
+   the window, so the bar keeps fitting as the window gets narrower. */
+.shell-plan-name {
+  flex: none;
+  width: clamp(6rem, 100vw - 62rem, 16rem);
+  min-height: 2rem;
+  padding: 0 var(--s-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+.shell-plan-name::placeholder {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+.shell-plan-name:hover {
+  border-color: var(--line-strong);
+}
+
+.shell-plan-name:focus-visible {
+  border-color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+
+.shell-history {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+/* As wide as its longest text, so the bar does not shift between "Saving" and "Saved in
+   this browser" on every edit. */
+.shell-save-text {
+  flex: none;
+  min-width: 8.75rem;
+  white-space: nowrap;
+}
+
+.shell-conflict {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  white-space: nowrap;
+}
+
+.shell-file {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--s-4) 0 var(--s-1);
+}
+
+/* What the File button shows: the word and, when there is something to export, a dot. */
+.shell-file-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+/* The plan has changes that are in no exported file. */
+.shell-file-dot {
+  flex: none;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+@media (max-width: 999px) {
+  .shell-scroll {
+    gap: var(--s-3);
+  }
+
+  /* Out of sight to make room, but still the heading of the page for a screen reader. */
+  .shell-product {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .shell-save-text {
+    display: none;
+  }
+
+  .shell-plan-name {
+    width: clamp(6rem, 100vw - 44rem, 14rem);
+  }
+}

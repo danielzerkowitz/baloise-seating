@@ -1,0 +1,106 @@
+/* The conflict list. Made for the narrow side panel of the Plan view (about 20rem): every
+   line may wrap, nothing has a fixed width, so it also works in a wider place. */
+
+.conflicts-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+/* The number of rows in a section, as a sign next to its name. */
+.conflicts-count {
+  font-size: var(--sign-sm);
+  color: var(--ink);
+}
+
+/* A row: the level's icon, then everything about the problem in one column. */
+.conflicts-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  column-gap: var(--s-2);
+  padding: var(--s-2) 0 var(--s-3);
+  border-top: 1px solid var(--line);
+}
+
+/* Lines the icon up with the first line of the title. */
+.conflicts-icon {
+  margin-top: 0.1rem;
+}
+
+.conflicts-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.conflicts-title {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.conflicts-also {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+.conflicts-detail {
+  overflow-wrap: anywhere;
+}
+
+.conflicts-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-1) var(--s-3);
+}
+
+/* The fixes a row offers, as buttons that may run over several lines. */
+.conflicts-fixes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--s-1);
+}
+
+.conflicts-fix {
+  max-width: 100%;
+}
+
+/* A fix names teams and days and can be long: let it wrap inside its button. */
+.conflicts-fix-label {
+  padding: var(--s-1) 0;
+  line-height: var(--leading-ui);
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* "Why is this fine?": the field takes the line, the buttons follow or wrap below it. */
+.conflicts-accept {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.conflicts-accept-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.conflicts-accepted {
+  min-width: 0;
+}
+
+.conflicts-accepted-summary {
+  padding: var(--s-1) 0 var(--s-2);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}

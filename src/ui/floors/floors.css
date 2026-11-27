@@ -1,0 +1,488 @@
+/* The Floors view: the floor list, the canvas with the sheet, the properties.
+
+   Nothing here relies on coming after base.css, app.css or sheet.css in the page. As the app
+   is wired, base.css and app.css in fact come after the stylesheets of the views, so a rule
+   of theirs beats a rule of the same weight here. Where an element also carries one of their
+   classes, the rules below therefore either set properties that class leaves alone or use a
+   selector of two classes, which wins in any order. */
+
+/* ---------- Frame: list, canvas, properties ---------- */
+
+.floors.view {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr) var(--side-w);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* Without a floor there is nothing to show properties of. */
+.floors.floors--bare {
+  grid-template-columns: 15rem minmax(0, 1fr);
+}
+
+/* ---------- Floor list ---------- */
+
+.floors-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.floors-list__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-3) var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.floors-list__rows {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-2);
+  overflow-y: auto;
+}
+
+.floors-row {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.floors-row__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3) var(--s-2) var(--s-2);
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  text-align: left;
+}
+
+.floors-row__main:hover {
+  background: var(--sunken);
+}
+
+/* The shown floor: ink, like every pressed button. */
+.floors-row__main[aria-pressed='true'] {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.floors-row__sign {
+  flex: none;
+  min-width: 2.25rem;
+  font-size: var(--sign-md);
+  text-align: center;
+}
+
+.floors-row__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.floors-row__name {
+  font-weight: 600;
+}
+
+/* Quieter than the name on either background: the row of the shown floor is inverted. */
+.floors-row__meta {
+  font-size: var(--text-sm);
+  opacity: 0.72;
+}
+
+/* ---------- Canvas ---------- */
+
+.floors-canvas {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.floors-canvas--empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.floors-toolbar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-5);
+  padding: var(--s-2) var(--s-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.floors-tools {
+  display: flex;
+  gap: var(--s-1);
+}
+
+/* Only for the keyboard: out of sight until Tab reaches it, like a skip link. */
+.floors-keyboard-add:not(:focus) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.floors-tally {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-1) var(--s-4);
+}
+
+.floors-tally__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-1);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.floors-tally__number {
+  color: var(--ink);
+  font-size: var(--sign-sm);
+}
+
+.floors-toolbar__hint {
+  flex: 1 1 12rem;
+  min-width: 0;
+  text-align: right;
+}
+
+/* ---------- The sheet while editing ---------- */
+
+/* A drag belongs to the tool, not to the page: without this a touch would scroll. */
+.floors-sheet--draw {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* Shared by the handles and by the sheet during a drag, so the cursor stays the same when
+   the pointer runs ahead of the box. */
+.floors-cursor--move {
+  cursor: move;
+}
+
+.floors-cursor--ns {
+  cursor: ns-resize;
+}
+
+.floors-cursor--ew {
+  cursor: ew-resize;
+}
+
+.floors-cursor--nwse {
+  cursor: nwse-resize;
+}
+
+.floors-cursor--nesw {
+  cursor: nesw-resize;
+}
+
+/* ---------- Area boxes ---------- */
+
+.floors-box {
+  position: absolute;
+  display: block;
+  padding: 0;
+  border: 1.5px solid var(--ink);
+  border-radius: var(--r-sheet);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: move;
+  touch-action: none;
+}
+
+/* The three uses: a solid outline with a light wash for desks, a dashed outline for
+   overflow seats, faint hatching for what is not seating. */
+.floors-box--desks {
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+}
+
+.floors-box--overflow {
+  border-style: dashed;
+}
+
+.floors-box--no-seating {
+  border: 1px solid var(--line-strong);
+  background: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--ink) 13%, transparent) 0 2px,
+    transparent 2px 9px
+  );
+}
+
+/* After the uses, so it thickens whatever outline they drew. The focus ring is separate:
+   base.css draws it as a shadow, which no rule here touches. */
+.floors-box--selected {
+  z-index: 2;
+  border-width: 2px;
+  border-color: var(--ink);
+}
+
+.floors-box--inert {
+  pointer-events: none;
+}
+
+/* The tag: a small flag on the top edge with the name and the seats. It keeps to the width
+   of its box, so that the tags of neighbouring areas do not cover each other, but a narrow
+   box still gets room for a short name. */
+.floors-box__tag {
+  position: absolute;
+  left: -1.5px;
+  top: 0;
+  transform: translateY(-58%);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-1);
+  /* Above every box, so a neighbour's outline never runs through a name. */
+  z-index: 1;
+  max-width: max(calc(100% + 3px), 4rem);
+  padding: 0 var(--s-1);
+  border: 1px solid var(--ink);
+  border-radius: var(--r-sheet);
+  background: var(--surface);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: var(--leading-ui);
+  white-space: nowrap;
+}
+
+.floors-box__tag--selected {
+  max-width: none;
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.floors-box__seats {
+  flex: none;
+  font-size: var(--text-sm);
+}
+
+.floors-handle {
+  position: absolute;
+  z-index: 3;
+  width: 0.75rem;
+  height: 0.75rem;
+  padding: 0;
+  border: 1.5px solid var(--ink);
+  border-radius: var(--r-sheet);
+  background: var(--surface);
+  transform: translate(-50%, -50%);
+  touch-action: none;
+}
+
+/* The focus ring of base.css comes with a control's rounder corners. On the sheet the ring
+   keeps the shape of the paper outline it is drawn around. */
+.floors-box:focus-visible,
+.floors-handle:focus-visible {
+  border-radius: var(--r-sheet);
+}
+
+/* A box that is being drawn. */
+.floors-draft {
+  position: absolute;
+  z-index: 3;
+  border: 1.5px dashed var(--ink);
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  pointer-events: none;
+}
+
+/* ---------- Properties ---------- */
+
+.floors-side {
+  min-width: 0;
+  border-left: 1px solid var(--line);
+}
+
+/* Keeps a field for a few characters from stretching over the whole panel. */
+.floors-short {
+  max-width: 5rem;
+}
+
+.floors-use {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.floors-use__legend {
+  margin-bottom: var(--s-2);
+  padding: 0;
+}
+
+.floors-use__option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  cursor: pointer;
+}
+
+.floors-use__radio {
+  flex: none;
+  margin: 0.2rem 0 0;
+  accent-color: var(--ink);
+}
+
+.floors-use__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.floors-use__name {
+  font-weight: 500;
+}
+
+.floors-used {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.floors-used__item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.floors-used__days {
+  flex: none;
+  margin-left: auto;
+}
+
+/* A plain block around the preview image. As a flex item itself, an image that is limited
+   in both width and height is stretched out of proportion by some browsers. */
+.floors-preview {
+  align-self: stretch;
+}
+
+.floors-preview__image {
+  max-height: 7rem;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.floors-steps {
+  padding-left: var(--s-5);
+  list-style: decimal;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  line-height: var(--leading-text);
+}
+
+.floors-steps__step {
+  margin-bottom: var(--s-1);
+  padding-left: var(--s-1);
+}
+
+/* ---------- Add a floor ---------- */
+
+.floors-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-control);
+}
+
+.floors-drop--over {
+  border-color: var(--ink);
+  background: var(--sunken);
+}
+
+.floors-drop__file {
+  max-width: 100%;
+}
+
+/* The button inside the browser's own file field, drawn like the other buttons. */
+.floors-drop__file::file-selector-button {
+  height: 2rem;
+  margin-right: var(--s-3);
+  padding: 0 var(--s-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-control);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.floors-drop__file::file-selector-button:hover {
+  border-color: var(--ink-3);
+  background: var(--sunken);
+}
+
+/* ---------- Narrow windows: list on top, properties below the canvas ---------- */
+
+@media (max-width: 1000px) {
+  /* The rows take the height of their content and the view scrolls as a whole; the canvas
+     keeps a workable height. */
+  .floors.view {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: max-content minmax(24rem, 1fr) max-content;
+    overflow-y: auto;
+  }
+
+  .floors.floors--bare {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: max-content minmax(0, 1fr);
+  }
+
+  .floors-list {
+    flex-direction: row;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .floors-list__head {
+    border-bottom: 0;
+  }
+
+  /* Wrapping, not scrolling sideways: a scrolling row would cut off the menus of its floors. */
+  .floors-list__rows {
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow-y: visible;
+  }
+
+  .floors-side {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}

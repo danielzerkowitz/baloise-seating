@@ -1,0 +1,89 @@
+/* Design tokens.
+
+   Principles
+   1. The floor plan is the hero. Everything around it is monochrome ink on
+      cool paper.
+   2. Colour is data: a hue always means a team; red, amber and green always
+      mean a status. The interface itself never uses colour for decoration.
+   3. Signage numerals: floors, counts and meters are set in Barlow Condensed,
+      large, the way a stairwell names its floors.
+   4. Regions are divided by hairlines where there is real structure. No
+      card-on-card, no decorative shadows: only the sheet and things that
+      float above the page cast one.
+*/
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --table: #dde2e8; /* the drafting table behind the sheet */
+  --panel: #f5f6f8; /* side panels and bars */
+  --surface: #ffffff; /* sheet, inputs, popovers */
+  --sunken: #e9edf1; /* wells, meter tracks, hovered rows */
+  --line: #cfd5dd; /* structural hairlines */
+  --line-strong: #97a2b1; /* input borders, dividers that must read */
+
+  /* Ink */
+  --ink: #16233b; /* text, primary controls, selected states */
+  --ink-2: #44526a; /* secondary text */
+  --ink-3: #6b788c; /* tertiary text, placeholders */
+  --on-ink: #ffffff;
+  --ink-hover: #22345a;
+
+  /* Status: the only colours that are not teams */
+  --conflict: #cf2038;
+  --conflict-ink: #a3142a;
+  --conflict-wash: #fde9ec;
+  --warning: #f0a202;
+  --warning-ink: #8a5a00;
+  --warning-wash: #fdf2d6;
+  --ok: #148461;
+  --ok-ink: #0d6249;
+  --ok-wash: #dff3eb;
+  --note-wash: #e6ecf5; /* informational notes use ink on this wash */
+
+  /* Type */
+  --font-ui: 'Barlow', 'Helvetica Neue', Arial, sans-serif;
+  --font-sign: 'Barlow Condensed', 'Barlow', 'Arial Narrow', sans-serif;
+
+  --text-xs: 0.75rem; /* 12px: meta, table captions */
+  --text-sm: 0.8125rem; /* 13px: dense lists, chips */
+  --text-md: 0.875rem; /* 14px: default interface text */
+  --text-lg: 1rem; /* 16px: panel titles */
+  --text-xl: 1.25rem; /* 20px: view titles */
+  --sign-sm: 1.25rem; /* small signage numerals */
+  --sign-md: 1.75rem;
+  --sign-lg: 2.75rem;
+  --sign-xl: 4.5rem; /* the floor numeral in the title block */
+
+  --leading-tight: 1.15;
+  --leading-ui: 1.35;
+  --leading-text: 1.5;
+
+  /* Space: 4px grid */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2rem;
+  --s-7: 3rem;
+
+  /* Shape: radius follows role, not one value everywhere */
+  --r-control: 5px; /* buttons, inputs */
+  --r-float: 8px; /* popovers, dialogs, toasts */
+  --r-sheet: 2px; /* the plan sheet: paper has almost no radius */
+  --r-pill: 999px; /* team chips: they are magnets you move around */
+
+  /* Elevation: only for the sheet and for things that float */
+  --shadow-sheet: 0 1px 0 rgb(22 35 59 / 0.1), 0 14px 34px -14px rgb(22 35 59 / 0.32);
+  --shadow-float: 0 2px 6px rgb(22 35 59 / 0.1), 0 14px 36px -8px rgb(22 35 59 / 0.26);
+
+  /* Layout */
+  --bar-h: 3.25rem;
+  --rail-w: 5.25rem; /* the floor stack */
+  --side-w: 20rem; /* the team tray */
+
+  --focus: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink);
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}

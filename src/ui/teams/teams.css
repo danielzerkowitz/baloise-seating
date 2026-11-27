@@ -1,0 +1,519 @@
+/* "Teams and days": a matrix of teams and weekdays.
+
+   Before changing a selector here, know this: the styles of a view and base.css can end up
+   in either order in the bundle, so a single class of ours cannot be relied on to win
+   against a base class on the same element. Wherever a base class has to give way (.input,
+   .select, .popover, .empty, the cells of .table) the selector names two classes. Everywhere
+   else it is one class, but for the menu button of a day, which shows when its cell is
+   pointed at.
+
+   Team colours arrive as --team and --team-ink, set inline with teamStyle().
+
+   The view's root also carries the class "teams"; it is a hook without a rule. */
+
+/* ---------- Header and assumptions ---------- */
+
+.teams-heading {
+  min-width: 0;
+}
+
+.teams-intro {
+  margin-top: var(--s-1);
+}
+
+.teams-assumptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4) var(--s-6);
+  margin-bottom: var(--s-5);
+}
+
+.teams-assumptions__field {
+  flex: 0 1 19rem;
+  min-width: 0;
+}
+
+.teams-percent {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+/* The invitation shown instead of the table: on this page it starts at the same left edge
+   as the title and the assumptions, without the side padding it has inside a panel. */
+.empty.teams-empty {
+  padding-inline: 0;
+}
+
+/* ---------- The table ---------- */
+
+/* Scrolls sideways when the window is narrower than the table. The padding keeps the focus
+   rings of the outermost cells inside the scrolling box, which would cut them off.
+   Positioned, so that the visually hidden texts in the table (they are absolutely
+   positioned) scroll along with it instead of sticking out of the page. */
+.teams-scroll {
+  position: relative;
+  margin: 0 calc(-1 * var(--s-1));
+  padding: var(--s-1);
+  overflow-x: auto;
+}
+
+/* Column widths are fixed, so that typing a long name or seating a team never makes the
+   weekdays jump. Team and Where have no width of their own and share what is left: the
+   other columns add up to 50rem, and the least the table is wide leaves the two 14.75rem
+   to share. With that it fits a window of 1100px, the narrowest the app is made for, also
+   when a scrollbar takes its part of the width. */
+.teams-table {
+  min-width: 66rem;
+  table-layout: fixed;
+}
+
+/* With the column for the preferred floor. */
+.teams-table--floors {
+  min-width: 74rem;
+}
+
+.teams-col--color {
+  width: 2.5rem;
+}
+
+.teams-col--code {
+  width: 4.25rem;
+}
+
+.teams-col--group {
+  width: 7rem;
+}
+
+.teams-col--people {
+  width: 4.75rem;
+}
+
+.teams-col--seats {
+  width: 4rem;
+}
+
+.teams-col--day {
+  width: 5.25rem;
+}
+
+.teams-col--floor {
+  width: 8rem;
+}
+
+.teams-col--menu {
+  width: 2.5rem;
+}
+
+/* A wider window has room for wider days: the suggestions under a full day read better. */
+@media (min-width: 1280px) {
+  .teams-col--day {
+    width: 6rem;
+  }
+}
+
+/* The header is two rows that belong together: the names of the columns and, under the
+   weekdays, how full each day gets. The line that closes the header comes after both. */
+.teams-table .teams-th {
+  padding-bottom: var(--s-1);
+  border-bottom: 0;
+}
+
+.teams-table .teams-th--day {
+  padding-inline: var(--s-1);
+  text-align: center;
+}
+
+/* All cells of the second row sit on one baseline, so "Seats needed" reads as the label of
+   the large numerals next to it. */
+.teams-table .teams-load-label {
+  padding-top: 0;
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--line-strong);
+  text-align: right;
+  vertical-align: baseline;
+}
+
+.teams-table .teams-load {
+  padding: 0 var(--s-1) var(--s-3);
+  border-bottom: 1px solid var(--line-strong);
+  text-align: center;
+  vertical-align: baseline;
+}
+
+.teams-table .teams-load-rest {
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.teams-load__needed {
+  font-size: var(--sign-md);
+}
+
+.teams-load__meter {
+  margin: var(--s-1) 0;
+}
+
+.teams-load__level {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--s-1);
+  line-height: var(--leading-tight);
+}
+
+.teams-load__moves {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin-top: var(--s-2);
+}
+
+/* A suggestion names a team and a day and is longer than a weekday column is wide: the
+   button takes the width of the column and its text runs over several lines. */
+.teams-move {
+  width: 100%;
+}
+
+.teams-move__label {
+  padding: var(--s-1) 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The fields of a row carry their own padding; the cells around them need little. */
+.teams-table .teams-td {
+  padding: var(--s-1);
+}
+
+/* Text, not a field: lined up with the column's heading. */
+.teams-table .teams-td--where {
+  padding: var(--s-1) var(--s-3);
+}
+
+/* ---------- Fields that read as text until you point at them or type in them ---------- */
+
+.input.teams-quiet,
+.select.teams-quiet {
+  border-color: transparent;
+  background-color: transparent;
+}
+
+.input.teams-quiet:hover,
+.select.teams-quiet:hover {
+  border-color: var(--line-strong);
+  background-color: var(--surface);
+}
+
+.input.teams-quiet:focus-visible,
+.select.teams-quiet:focus-visible {
+  border-color: var(--ink);
+  background-color: var(--surface);
+}
+
+.teams-name {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.teams-name__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ---------- Colour and seats: buttons that open a popover ---------- */
+
+.teams-swatch {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.teams-swatch:hover {
+  background: var(--sunken);
+}
+
+/* Keeps the focus ring round: the shared ring would square the corners. */
+.teams-swatch:focus-visible {
+  border-radius: 50%;
+}
+
+/* The number, and under it the team's own attendance when it has one. Set tight, so that
+   two lines are no higher than the fields next to them. */
+.teams-seats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  width: 100%;
+  min-height: 2rem;
+  padding: 0 var(--s-2) 0 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.teams-seats:hover {
+  border-color: var(--line-strong);
+  background: var(--surface);
+}
+
+.teams-seats__n {
+  font-size: var(--sign-sm);
+}
+
+.teams-seats__reset {
+  align-self: flex-start;
+}
+
+/* ---------- A day: one team on one weekday ---------- */
+
+/* The look of a day, shared by the cells of the table and the samples of the legend.
+   Not planned and not wanted: an empty slot. */
+.teams-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-1);
+  min-width: 2.5rem;
+  min-height: 2rem;
+  padding: 0 var(--s-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--ink-3);
+}
+
+/* Wanted, not planned: outlined and hatched in the team's colour. */
+.teams-slot--wanted {
+  border: 1.5px solid var(--team, var(--ink-2));
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--team, var(--ink-2)) 38%, transparent) 0 3px,
+    transparent 3px 7px
+  );
+}
+
+/* Planned: filled with the team's colour. */
+.teams-slot--planned {
+  border-color: var(--team, var(--ink-2));
+  background: var(--team, var(--ink-2));
+  color: var(--team-ink, var(--on-ink));
+}
+
+/* The cell: the day's button and, on top of its right edge, the button for its menu. */
+.teams-day {
+  position: relative;
+  display: flex;
+  --teams-day-ink: var(--ink-2);
+}
+
+.teams-day--planned {
+  --teams-day-ink: var(--team-ink, var(--on-ink));
+}
+
+.teams-day__btn {
+  flex: 1 1 auto;
+}
+
+.teams-day__btn:hover {
+  border-color: var(--ink);
+}
+
+.teams-day__icon {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.teams-day__count {
+  font-size: var(--text-lg);
+}
+
+/* "Could also come". */
+.teams-day__ring {
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  border: 2px solid var(--team, var(--ink-2));
+  border-radius: 50%;
+}
+
+.teams-day__more {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  display: grid;
+  place-items: center;
+  width: 1.125rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--teams-day-ink);
+  opacity: 0;
+}
+
+.teams-day:hover .teams-day__more,
+.teams-day:focus-within .teams-day__more,
+.teams-day__more[aria-expanded='true'] {
+  opacity: 1;
+}
+
+.teams-day__more:hover {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.teams-day__chevron {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+/* Where nothing can hover (a tablet), the way into the menu is always shown. */
+@media (hover: none) {
+  .teams-day__more {
+    opacity: 1;
+  }
+}
+
+/* ---------- Where a team sits ---------- */
+
+.teams-where {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-1) var(--s-2);
+  min-width: 0;
+}
+
+.teams-where__link {
+  min-width: 0;
+  font-size: var(--text-sm);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- The row for adding a team ---------- */
+
+/* The plus that marks the row, in the column of the colours. */
+.teams-add__plus {
+  display: grid;
+  place-items: center;
+  min-height: 2rem;
+  color: var(--ink-3);
+}
+
+.teams-add__error {
+  display: block;
+  margin-top: var(--s-1);
+}
+
+.teams-add__day {
+  width: 100%;
+}
+
+/* ---------- Legend ---------- */
+
+/* The samples are nobody's team: they are drawn in ink. */
+.teams-legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+  --team: var(--ink-2);
+  --team-ink: var(--on-ink);
+}
+
+.teams-legend__list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-5);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+
+.teams-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+/* After .teams-slot, whose size it takes over: a sample is smaller than a cell. */
+.teams-legend__sample {
+  flex: none;
+  width: 2.5rem;
+  min-height: 1.5rem;
+}
+
+/* ---------- Popovers ---------- */
+
+/* Fixed to the window and positioned by Popover.tsx. A long team name wraps rather than
+   stretching the popover across the window. */
+.popover.teams-popover {
+  position: fixed;
+  top: 0;
+  left: 0;
+  max-width: min(22rem, calc(100vw - var(--s-4)));
+  max-height: calc(100dvh - var(--s-4));
+  overflow: auto;
+}
+
+/* Popovers live in <body>, outside the app that print hides: keep them off the paper too. */
+@media print {
+  .popover.teams-popover {
+    display: none;
+  }
+}
+
+/* A menu item: room for a check, the label, and the key that picks it. */
+.teams-menu__check {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+}
+
+.teams-menu__label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.teams-menu__key {
+  flex: none;
+  margin-left: var(--s-3);
+  color: var(--ink-2);
+}
+
+/* ---------- Pasting teams ---------- */
+
+.teams-check {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--s-2);
+}
+
+.teams-check__box {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+.teams-paste__problems {
+  margin-top: var(--s-1);
+  padding-left: var(--s-4);
+  list-style: disc;
+}
